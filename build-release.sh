@@ -4,6 +4,7 @@ set -eu
 
 cross_bin="${CROSS:-cross}"
 zigbuild_bin="${CARGO_ZIGBUILD:-cargo-zigbuild}"
+xwin_bin="${CARGO_XWIN:-cargo-xwin}"
 out_dir="${OUT_DIR:-.}"
 target_root="${RELEASE_TARGET_ROOT:-target/release-build}"
 tmp="${TMPDIR:-/tmp}/ssh-obi-release.$$"
@@ -27,7 +28,7 @@ powerpc64le-unknown-linux-musl
 '
 
 default_client_only_targets='
-x86_64-pc-windows-gnu
+x86_64-pc-windows-msvc
 '
 
 cross_server_targets="${CROSS_SERVER_TARGETS-$default_cross_server_targets}"
@@ -51,8 +52,20 @@ need_command() {
 
 need_command "$cross_bin"
 need_command "$zigbuild_bin"
+need_command "$xwin_bin"
 need_command rustup
 need_command zig
+
+first_available_command() {
+    for command in "$@"; do
+        if command -v "$command" >/dev/null 2>&1; then
+            command -v "$command"
+            return 0
+        fi
+    done
+
+    return 1
+}
 
 ensure_rust_target() {
     target="$1"
@@ -109,11 +122,19 @@ run_zigbuild() {
     "$zigbuild_bin" zigbuild --target-dir "$cargo_target_dir" --release --target "$target" --features server-bin --bins
 }
 
-run_zigbuild_client() {
+run_xwin_client() {
     target="$1"
     cargo_target_dir="$2"
 
-    "$zigbuild_bin" zigbuild --target-dir "$cargo_target_dir" --release --target "$target" --bin ssh-obi
+    llvm_lib="${LLVM_LIB:-}"
+    if [ -z "$llvm_lib" ]; then
+        if ! llvm_lib="$(first_available_command llvm-lib llvm-lib-21 llvm-lib-20)"; then
+            printf 'missing required command for MSVC builds: llvm-lib, llvm-lib-21, or llvm-lib-20\n' >&2
+            exit 1
+        fi
+    fi
+
+    AR_x86_64_pc_windows_msvc="$llvm_lib" "$xwin_bin" build --target-dir "$cargo_target_dir" --release --target "$target" --bin ssh-obi
 }
 
 # Cargo host artifacts, including build-script executables, are not portable
@@ -174,7 +195,7 @@ for target in $client_only_targets; do
     case "$target" in
         *windows*)
             ensure_rust_target "$target"
-            run_zigbuild_client "$target" "$cargo_target_dir"
+            run_xwin_client "$target" "$cargo_target_dir"
             ;;
         *)
             "$cross_bin" build --target-dir "$cargo_target_dir" --release --target "$target" --bin ssh-obi

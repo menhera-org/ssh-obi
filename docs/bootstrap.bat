@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 set "want=0.1"
-set "target=x86_64-pc-windows-gnu"
+set "target=x86_64-pc-windows-msvc"
 set "base_url=https://obi.menhera.org"
 
 if "%~1"=="--" shift

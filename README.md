@@ -103,7 +103,7 @@ ssh-obi/
 ├── bootstrap.bat                   # Windows cmd.exe client installer
 ├── bootstrap.ps1                   # Windows PowerShell client installer
 ├── build-docs.sh                   # builds mdBook and re-copies published artifacts into docs/
-├── build-release.sh                # builds release tarballs with cross-rs, cargo-zigbuild, and tar
+├── build-release.sh                # builds release tarballs with cross-rs, cargo-zigbuild, cargo-xwin, and tar
 └── src/
     ├── lib.rs                      # re-exports the modules below as the `ssh_obi` library crate
     ├── protocol.rs                 # wire protocol: framing, capability handshake, control messages
@@ -168,7 +168,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://obi.menhera.
 curl.exe -fsSL -o "%TEMP%\ssh-obi-bootstrap.bat" https://obi.menhera.org/bootstrap.bat && "%TEMP%\ssh-obi-bootstrap.bat" --install
 ```
 
-Both Windows bootstraps install the client-only `release-x86_64-pc-windows-gnu.tar.gz`, copy `ssh-obi.exe` to `%USERPROFILE%\.ssh-obi\bin`, add that directory to the user's PATH, print `OBI-INSTALL-COMPLETE`, and exit without starting a server.
+Both Windows bootstraps install the client-only `release-x86_64-pc-windows-msvc.tar.gz`, copy `ssh-obi.exe` to `%USERPROFILE%\.ssh-obi\bin`, add that directory to the user's PATH, print `OBI-INSTALL-COMPLETE`, and exit without starting a server.
 
 ## Cargo.toml (skeleton)
 
@@ -248,13 +248,13 @@ These are settled — please don't relitigate without discussion:
 
 ## mdBook-based obi.menhera.org site
 
-`docs/` hosts a mdBook-generated documentation website and it is not `.gitignore`-d. It is to be served by GitHub pages. It is to contain release tarballs built with cross-rs or `cargo-zigbuild`, named like `release-<cargo target>.tar.gz` ('release' is literal, not a version). The release archive is unpacked using a maximally-portable set of commands. No GNUism, no BSDism, etc. Signature verification is skipped for MVP, trusting HTTPS. It will be located at `https://obi.menhera.org/`.
+`docs/` hosts a mdBook-generated documentation website and it is not `.gitignore`-d. It is to be served by GitHub pages. It is to contain release tarballs built with cross-rs, `cargo-zigbuild`, or `cargo-xwin`, named like `release-<cargo target>.tar.gz` ('release' is literal, not a version). The release archive is unpacked using a maximally-portable set of commands. No GNUism, no BSDism, etc. Signature verification is skipped for MVP, trusting HTTPS. It will be located at `https://obi.menhera.org/`.
 
 Build `docs/` with `./build-docs.sh`, not by running `mdbook build` directly. mdBook overwrites `docs/` on every build, so `build-docs.sh` must copy every non-mdBook artifact needed by the published site after each build, including `bootstrap.sh`, `bootstrap.bat`, `bootstrap.ps1`, `.nojekyll`, and any `release-<cargo target>.tar.gz` archives.
 
 Each tarball contains only `LICENSE-APACHE`, `LICENSE-MPL`, `ssh-obi`, and `ssh-obi-server`, except client-only targets where `ssh-obi-server` is omitted. Platform executable suffixes are kept, so the Windows client-only tarball contains `ssh-obi.exe`.
 
-Build release archives with `./build-release.sh`. It builds x86_64/aarch64 Linux, FreeBSD, illumos, and NetBSD targets with cross-rs. NetBSD uses a tiny target-only `libexecinfo` fallback during the build because the cross-rs NetBSD image currently lacks that target library. It builds Darwin, riscv64 Linux musl, powerpc64le Linux musl, and the Windows client-only target with `cargo-zigbuild` plus `zig`: Darwin avoids custom cross images, riscv64/powerpc64le Linux musl avoid targets with no published cross-rs Docker image, and Windows avoids the cross-rs MinGW image's missing `GetHostNameW` import. The script installs the Rust std components needed by zigbuild targets with `rustup target add`, stages only the license files plus the target binaries, and creates the corresponding `release-<cargo target>.tar.gz` files with `tar` piped through `gzip`. Each target is built with its own Cargo target directory under `target/release-build/` so host-side build-script executables are not shared across build environments with different libc baselines. When `SDKROOT` is set to an absolute path for Darwin builds, the script passes it to `cargo-zigbuild` as a path relative to the repository root; this avoids Zig 0.14 treating `-L$SDKROOT/usr/lib` as relative to `--sysroot` and looking under `$SDKROOT/$SDKROOT/usr/lib`. `build-docs.sh` then copies those tarballs into `docs/` on every mdBook build.
+Build release archives with `./build-release.sh`. It builds x86_64/aarch64 Linux, FreeBSD, illumos, and NetBSD targets with cross-rs. NetBSD uses a tiny target-only `libexecinfo` fallback during the build because the cross-rs NetBSD image currently lacks that target library. It builds Darwin, riscv64 Linux musl, and powerpc64le Linux musl targets with `cargo-zigbuild` plus `zig`: Darwin avoids custom cross images, and riscv64/powerpc64le Linux musl avoid targets with no published cross-rs Docker image. It builds the Windows client-only target as `x86_64-pc-windows-msvc` with `cargo-xwin`, producing a slimmer MSVC binary that avoids the cross-rs MinGW image's missing `GetHostNameW` import. The script installs the Rust std components needed by zigbuild and xwin targets with `rustup target add`, stages only the license files plus the target binaries, and creates the corresponding `release-<cargo target>.tar.gz` files with `tar` piped through `gzip`. Each target is built with its own Cargo target directory under `target/release-build/` so host-side build-script executables are not shared across build environments with different libc baselines. When `SDKROOT` is set to an absolute path for Darwin builds, the script passes it to `cargo-zigbuild` as a path relative to the repository root; this avoids Zig 0.14 treating `-L$SDKROOT/usr/lib` as relative to `--sysroot` and looking under `$SDKROOT/$SDKROOT/usr/lib`. `build-docs.sh` then copies those tarballs into `docs/` on every mdBook build.
 
 - `release-x86_64-unknown-linux-musl.tar.gz`
 - `release-x86_64-unknown-freebsd.tar.gz`
@@ -266,7 +266,7 @@ Build release archives with `./build-release.sh`. It builds x86_64/aarch64 Linux
 - `release-aarch64-apple-darwin.tar.gz`
 - `release-powerpc64le-unknown-linux-musl.tar.gz`
 
-- `release-x86_64-pc-windows-gnu.tar.gz` (client only)
+- `release-x86_64-pc-windows-msvc.tar.gz` (client only)
 
 Rust/toolchain limitations. No other targets can be added at this stage.
 

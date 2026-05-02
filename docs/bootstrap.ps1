@@ -10,7 +10,7 @@ function Fail($Message) {
     exit 1
 }
 
-$target = "x86_64-pc-windows-gnu"
+$target = "x86_64-pc-windows-msvc"
 $baseUrl = "https://obi.menhera.org"
 
 $arch = $env:PROCESSOR_ARCHITEW6432
