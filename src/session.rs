@@ -1,13 +1,16 @@
 use std::fmt;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local};
 
 use crate::protocol::{SessionRecord, UnixTimeMillis};
 
 pub const SOCKET_PATH_LIMIT: usize = 100;
+const SESSION_ID_LEN: usize = 10;
+const MAX_GENERATE_ATTEMPTS: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionId(String);
@@ -46,6 +49,8 @@ impl fmt::Display for SessionId {
 pub enum SessionIdError {
     InvalidLength { len: usize },
     InvalidCharacter,
+    Random(String),
+    ExhaustedGeneration,
 }
 
 impl fmt::Display for SessionIdError {
@@ -60,11 +65,99 @@ impl fmt::Display for SessionIdError {
                     "session id must contain only lowercase base32 characters"
                 )
             }
+            Self::Random(message) => write!(f, "{message}"),
+            Self::ExhaustedGeneration => write!(f, "failed to generate a unique session id"),
         }
     }
 }
 
 impl std::error::Error for SessionIdError {}
+
+pub fn generate_session_id<'a>(
+    existing: impl IntoIterator<Item = &'a SessionId>,
+) -> Result<SessionId, SessionIdError> {
+    let existing = existing.into_iter().collect::<Vec<_>>();
+
+    for attempt in 0..MAX_GENERATE_ATTEMPTS {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&session_seed());
+        hasher.update(&random_nonce()?);
+        hasher.update(&(attempt as u64).to_be_bytes());
+        let candidate = encode_base32_lower(&hasher.finalize().as_bytes()[..8], SESSION_ID_LEN);
+        let candidate = SessionId::new(candidate)?;
+
+        if !existing.iter().any(|session_id| **session_id == candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    Err(SessionIdError::ExhaustedGeneration)
+}
+
+fn session_seed() -> [u8; 24] {
+    let wall = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let monotonic = Instant::now().elapsed().as_nanos();
+    let pid = std::process::id();
+
+    let mut seed = [0u8; 24];
+    seed[..16].copy_from_slice(&wall.to_be_bytes());
+    seed[16..20].copy_from_slice(&pid.to_be_bytes());
+    seed[20..].copy_from_slice(&(monotonic as u32).to_be_bytes());
+    seed
+}
+
+fn random_nonce() -> Result<[u8; 16], SessionIdError> {
+    let mut nonce = [0u8; 16];
+    fill_random(&mut nonce)?;
+    Ok(nonce)
+}
+
+#[cfg(unix)]
+fn fill_random(bytes: &mut [u8]) -> Result<(), SessionIdError> {
+    let mut file = fs::File::open("/dev/urandom")
+        .map_err(|err| SessionIdError::Random(format!("failed to open /dev/urandom: {err}")))?;
+    file.read_exact(bytes)
+        .map_err(|err| SessionIdError::Random(format!("failed to read /dev/urandom: {err}")))
+}
+
+#[cfg(not(unix))]
+fn fill_random(_bytes: &mut [u8]) -> Result<(), SessionIdError> {
+    Err(SessionIdError::Random(
+        "session id generation requires OS randomness".to_string(),
+    ))
+}
+
+fn encode_base32_lower(bytes: &[u8], len: usize) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut output = String::with_capacity(len);
+    let mut accumulator = 0u32;
+    let mut bits = 0u8;
+
+    for byte in bytes {
+        accumulator = (accumulator << 8) | u32::from(*byte);
+        bits += 8;
+
+        while bits >= 5 && output.len() < len {
+            bits -= 5;
+            let index = ((accumulator >> bits) & 0b11111) as usize;
+            output.push(ALPHABET[index] as char);
+        }
+
+        if output.len() == len {
+            break;
+        }
+    }
+
+    if output.len() < len && bits > 0 {
+        let index = ((accumulator << (5 - bits)) & 0b11111) as usize;
+        output.push(ALPHABET[index] as char);
+    }
+
+    output
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketPathError {
@@ -520,6 +613,19 @@ mod tests {
         );
         assert_eq!(info.current_command, "vim notes.md");
         assert_eq!(info.state, SessionState::Busy);
+    }
+
+    #[test]
+    fn generated_session_id_is_valid_base32() {
+        let id = generate_session_id(std::iter::empty()).unwrap();
+        assert_eq!(id.as_str().len(), 10);
+        assert!(SessionId::new(id.as_str()).is_ok());
+    }
+
+    #[test]
+    fn base32_encoder_uses_lowercase_alphabet() {
+        assert_eq!(encode_base32_lower(&[0xff, 0xff], 3), "777");
+        assert_eq!(encode_base32_lower(&[0x00, 0x00], 3), "aaa");
     }
 
     #[test]

@@ -3,6 +3,7 @@ pub mod cli;
 pub mod client;
 pub mod daemon;
 pub mod protocol;
+pub mod pty;
 pub mod server;
 pub mod session;
 pub mod transport;

@@ -1,0 +1,214 @@
+use std::fmt;
+use std::os::fd::OwnedFd;
+
+use crate::protocol::WindowSize;
+
+#[derive(Debug)]
+pub struct PtyPair {
+    pub master: OwnedFd,
+    pub slave: OwnedFd,
+}
+
+#[cfg(all(unix, not(target_os = "aix")))]
+#[derive(Debug)]
+pub struct PtyChild {
+    pub master: OwnedFd,
+    pub child: nix::unistd::Pid,
+}
+
+#[cfg(all(unix, not(target_os = "aix")))]
+pub fn open_pty(size: Option<WindowSize>) -> Result<PtyPair, PtyError> {
+    let winsize = size.map(to_nix_winsize);
+    let result = nix::pty::openpty(winsize.as_ref(), None).map_err(PtyError::Open)?;
+
+    Ok(PtyPair {
+        master: result.master,
+        slave: result.slave,
+    })
+}
+
+#[cfg(all(unix, not(target_os = "aix")))]
+pub fn spawn_pty_command(
+    program: &str,
+    args: &[&str],
+    env_overrides: &[(&str, &str)],
+    size: Option<WindowSize>,
+) -> Result<PtyChild, PtyError> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    use nix::pty::ForkptyResult;
+    use nix::unistd::execvpe;
+
+    let program = CString::new(program).map_err(|_| PtyError::NulByte("program"))?;
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push(program.clone());
+    for arg in args {
+        argv.push(CString::new(*arg).map_err(|_| PtyError::NulByte("argument"))?);
+    }
+
+    let override_names = env_overrides
+        .iter()
+        .map(|(name, _)| name.as_bytes())
+        .collect::<Vec<_>>();
+    let mut envp = Vec::new();
+    for (name, value) in std::env::vars_os() {
+        let name = name.as_os_str().as_bytes();
+        if override_names.contains(&name) {
+            continue;
+        }
+
+        let value = value.as_os_str().as_bytes();
+        let mut entry = Vec::with_capacity(name.len() + value.len() + 1);
+        entry.extend_from_slice(name);
+        entry.push(b'=');
+        entry.extend_from_slice(value);
+        envp.push(CString::new(entry).map_err(|_| PtyError::NulByte("environment"))?);
+    }
+    for (name, value) in env_overrides {
+        if name.as_bytes().contains(&b'=') {
+            return Err(PtyError::InvalidEnvironmentName((*name).to_string()));
+        }
+
+        let mut entry = Vec::with_capacity(name.len() + value.len() + 1);
+        entry.extend_from_slice(name.as_bytes());
+        entry.push(b'=');
+        entry.extend_from_slice(value.as_bytes());
+        envp.push(CString::new(entry).map_err(|_| PtyError::NulByte("environment"))?);
+    }
+
+    let winsize = size.map(to_nix_winsize);
+    // SAFETY: forkpty is called before this function starts any threads. The child branch only
+    // invokes execvpe with prebuilt C strings, then _exit if exec fails.
+    match unsafe { nix::pty::forkpty(winsize.as_ref(), None) }.map_err(PtyError::Fork)? {
+        ForkptyResult::Parent { child, master } => Ok(PtyChild { master, child }),
+        ForkptyResult::Child => {
+            let _ = execvpe(&program, &argv, &envp);
+            // SAFETY: We are in the post-fork child and exec failed; _exit avoids running parent
+            // Rust destructors in the child process.
+            unsafe { nix::libc::_exit(127) };
+        }
+    }
+}
+
+#[cfg(not(all(unix, not(target_os = "aix"))))]
+pub fn open_pty(_size: Option<WindowSize>) -> Result<PtyPair, PtyError> {
+    Err(PtyError::UnsupportedPlatform(
+        "PTY allocation requires a Unix platform supported by nix::pty::openpty",
+    ))
+}
+
+#[cfg(all(unix, not(target_os = "aix")))]
+fn to_nix_winsize(size: WindowSize) -> nix::pty::Winsize {
+    nix::pty::Winsize {
+        ws_row: size.rows,
+        ws_col: size.cols,
+        ws_xpixel: size.pixel_width,
+        ws_ypixel: size.pixel_height,
+    }
+}
+
+#[derive(Debug)]
+pub enum PtyError {
+    Open(nix::errno::Errno),
+    Fork(nix::errno::Errno),
+    NulByte(&'static str),
+    InvalidEnvironmentName(String),
+    UnsupportedPlatform(&'static str),
+}
+
+impl fmt::Display for PtyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open(err) => write!(f, "failed to open PTY: {err}"),
+            Self::Fork(err) => write!(f, "failed to fork PTY child: {err}"),
+            Self::NulByte(field) => write!(f, "PTY {field} contains a NUL byte"),
+            Self::InvalidEnvironmentName(name) => {
+                write!(f, "environment variable name contains '=': {name}")
+            }
+            Self::UnsupportedPlatform(reason) => write!(f, "{reason}"),
+        }
+    }
+}
+
+impl std::error::Error for PtyError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(all(unix, not(target_os = "aix")))]
+    #[test]
+    fn window_size_maps_to_nix_winsize() {
+        let winsize = to_nix_winsize(WindowSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 640,
+            pixel_height: 480,
+        });
+
+        assert_eq!(winsize.ws_row, 24);
+        assert_eq!(winsize.ws_col, 80);
+        assert_eq!(winsize.ws_xpixel, 640);
+        assert_eq!(winsize.ws_ypixel, 480);
+    }
+
+    #[cfg(all(unix, not(target_os = "aix")))]
+    #[test]
+    fn open_pty_returns_two_file_descriptors() {
+        let pair = open_pty(Some(WindowSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }))
+        .unwrap();
+
+        drop(pair);
+    }
+
+    #[cfg(all(unix, not(target_os = "aix")))]
+    #[test]
+    fn spawn_pty_command_execs_child_with_environment() {
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        use nix::sys::wait::{WaitStatus, waitpid};
+
+        let child = spawn_pty_command(
+            "/bin/sh",
+            &["-c", "printf '%s' \"$SSH_OBI_TEST_VALUE\""],
+            &[("SSH_OBI_TEST_VALUE", "pty-ok")],
+            Some(WindowSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            }),
+        )
+        .unwrap();
+        let mut master = std::fs::File::from(child.master);
+        let start = Instant::now();
+        let mut output = Vec::new();
+        let mut buf = [0u8; 64];
+
+        while start.elapsed() < Duration::from_secs(2) && !output.windows(6).any(|w| w == b"pty-ok")
+        {
+            match master.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => output.extend_from_slice(&buf[..n]),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            output.windows(6).any(|w| w == b"pty-ok"),
+            "pty output was {:?}",
+            String::from_utf8_lossy(&output)
+        );
+
+        let status = waitpid(child.child, None).unwrap();
+        assert!(matches!(status, WaitStatus::Exited(_, 0)));
+    }
+}

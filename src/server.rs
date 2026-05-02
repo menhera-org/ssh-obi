@@ -5,11 +5,11 @@ use std::path::Path;
 
 use crate::protocol::{
     DaemonInfo, DaemonInfoRequest, DetachRequest, DetachSessionRequest, ErrorMessage, MessageType,
-    ProtocolError, SessionList,
+    NewSessionRequest, ProtocolError, SessionList,
 };
 use crate::session::{
-    SocketPathError, list_session_socket_ids, remove_stale_socket, socket_dir_for_uid, socket_path,
-    socket_path_for_uid,
+    SessionIdError, SocketPathError, generate_session_id, list_session_socket_ids,
+    remove_stale_socket, socket_dir_for_uid, socket_path, socket_path_for_uid,
 };
 use crate::transport::{FramedReader, FramedWriter};
 
@@ -52,6 +52,19 @@ where
         let path = socket_path_for_uid(uid, &request.session_id)?;
         detach_via_socket(path)?;
         return Ok(());
+    }
+
+    if frame.msg_type() == MessageType::NEW_SESSION {
+        let _: NewSessionRequest = frame.decode_body()?;
+        let socket_dir = socket_dir_for_uid(uid);
+        let existing = list_session_socket_ids(&socket_dir)?;
+        let session_id = generate_session_id(existing.iter())?;
+        let message = format!(
+            "new session daemon launch is not implemented yet; reserved candidate session id {session_id}"
+        );
+        writer.write_body(MessageType::ERROR, 0, &ErrorMessage { message })?;
+        writer.flush()?;
+        return Err(ServerError::ActionNotImplemented("new session"));
     }
 
     let message = format!("unsupported broker request type {}", frame.msg_type().get());
@@ -152,8 +165,10 @@ pub enum ServerError {
     NoBrokerRequest,
     UnexpectedDaemonEof,
     UnexpectedMessage(u8),
+    ActionNotImplemented(&'static str),
     UnsupportedPlatform(&'static str),
     SocketPath(SocketPathError),
+    SessionId(SessionIdError),
 }
 
 impl fmt::Display for ServerError {
@@ -167,8 +182,10 @@ impl fmt::Display for ServerError {
             Self::UnexpectedMessage(msg_type) => {
                 write!(f, "daemon returned unexpected message type {msg_type}")
             }
+            Self::ActionNotImplemented(action) => write!(f, "{action} is not implemented yet"),
             Self::UnsupportedPlatform(reason) => write!(f, "{reason}"),
             Self::SocketPath(err) => write!(f, "{err}"),
+            Self::SessionId(err) => write!(f, "{err}"),
         }
     }
 }
@@ -179,6 +196,7 @@ impl std::error::Error for ServerError {
             Self::Connect(err) => Some(err),
             Self::Protocol(err) => Some(err),
             Self::SocketPath(err) => Some(err),
+            Self::SessionId(err) => Some(err),
             _ => None,
         }
     }
@@ -196,10 +214,18 @@ impl From<SocketPathError> for ServerError {
     }
 }
 
+impl From<SessionIdError> for ServerError {
+    fn from(value: SessionIdError) -> Self {
+        Self::SessionId(value)
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::protocol::{DetachRequest, SessionListRequest, SessionRecord, UnixTimeMillis};
+    use crate::protocol::{
+        DetachRequest, NewSessionRequest, SessionListRequest, SessionRecord, UnixTimeMillis,
+    };
     use std::fs;
     use std::io::Cursor;
     use std::os::unix::net::UnixListener;
@@ -290,6 +316,31 @@ mod tests {
         assert_eq!(frame.msg_type(), MessageType::SESSION_LIST);
         let list: SessionList = frame.decode_body().unwrap();
         assert!(list.sessions.is_empty());
+    }
+
+    #[test]
+    fn broker_new_session_returns_explicit_not_implemented_error() {
+        let mut request = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut request);
+            writer
+                .write_body(MessageType::NEW_SESSION, 0, &NewSessionRequest)
+                .unwrap();
+        }
+
+        let mut response = Vec::new();
+        let err =
+            handle_broker_request(Cursor::new(request), &mut response, 4_294_967_295).unwrap_err();
+        assert!(matches!(
+            err,
+            ServerError::ActionNotImplemented("new session")
+        ));
+
+        let mut reader = FramedReader::new(response.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::ERROR);
+        let error: ErrorMessage = frame.decode_body().unwrap();
+        assert!(error.message.contains("not implemented yet"));
     }
 
     fn test_listener(name: &str) -> Option<(UnixListener, std::path::PathBuf)> {

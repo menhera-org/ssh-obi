@@ -15,5 +15,6 @@ description = "Lightweight per-user terminal multiplexer with auto-reconnecting 
 ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+blake3 = "1"
 nix = { version = "0.31", features = ["term", "signal", "process", "fs", "user"] }
 serde = { version = "1", features = ["derive"] }
