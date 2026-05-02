@@ -18,11 +18,12 @@ panes, tabs, or in-band escape commands. If you want window management, run
 
 ## Status
 
-`ssh-obi` is in early development. Commands and release details may still
-change before the first `0.1.0` release is finalized.
+`ssh-obi` `v0.1.0` is the first published release. It is available on
+crates.io, tagged as `v0.1.0` on GitHub, and distributed as release tarballs
+from `https://obi.menhera.org/`.
 
 The documentation on this site is the user-facing source for the published
-bootstrap scripts and release tarballs at `https://obi.menhera.org/`.
+bootstrap scripts, release tarballs, install flow, and supported platforms.
 
 ## Quick Examples
 

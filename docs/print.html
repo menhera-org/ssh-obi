@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b89fb2c7.js";
+            window.path_to_searchindex_js = "searchindex-c7b4dc8e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6266f562.js"></script>
@@ -191,10 +191,11 @@ use.</li>
 panes, tabs, or in-band escape commands. If you want window management, run
 <code>tmux</code> or another multiplexer inside the remote shell.</p>
 <h2 id="status"><a class="header" href="#status">Status</a></h2>
-<p><code>ssh-obi</code> is in early development. Commands and release details may still
-change before the first <code>0.1.0</code> release is finalized.</p>
+<p><code>ssh-obi</code> <code>v0.1.0</code> is the first published release. It is available on
+crates.io, tagged as <code>v0.1.0</code> on GitHub, and distributed as release tarballs
+from <code>https://obi.menhera.org/</code>.</p>
 <p>The documentation on this site is the user-facing source for the published
-bootstrap scripts and release tarballs at <code>https://obi.menhera.org/</code>.</p>
+bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
 <h2 id="quick-examples"><a class="header" href="#quick-examples">Quick Examples</a></h2>
 <p>Connect to a host:</p>
 <pre><code class="language-sh">ssh-obi user@example.com
@@ -283,8 +284,16 @@ scrollback.</p>
 bootstrap scripts download those tarballs and install binaries into
 <code>~/.ssh-obi/bin</code> on Unix-like systems or <code>%USERPROFILE%\.ssh-obi\bin</code> on
 Windows.</p>
+<p>The crate is also published on crates.io as <code>ssh-obi</code>.</p>
 <p>Signature verification is not implemented for the MVP. The bootstrap trusts
 HTTPS.</p>
+<h2 id="local-client-install-from-cratesio"><a class="header" href="#local-client-install-from-cratesio">Local Client Install From crates.io</a></h2>
+<p>If you already have a Rust toolchain, install the local client with:</p>
+<pre><code class="language-sh">cargo install ssh-obi
+</code></pre>
+<p>This installs the client binary, <code>ssh-obi</code>. It does not install the remote
+server binary by default. For normal use, let the client bootstrap or update
+the remote server component when you connect.</p>
 <h2 id="unix-install"><a class="header" href="#unix-install">Unix Install</a></h2>
 <p>To preinstall or update a Unix-like account without starting a session:</p>
 <pre><code class="language-sh">wget -O - https://obi.menhera.org/bootstrap.sh | sh -s -- --install
@@ -634,6 +643,9 @@ Pages after each build:</p>
 <li>release tarballs found in known release output locations</li>
 </ul>
 <h2 id="release-builds"><a class="header" href="#release-builds">Release Builds</a></h2>
+<p>The first published release is <code>v0.1.0</code>. It is published to crates.io and
+tagged on GitHub as <code>v0.1.0</code>. Release tarballs for the bootstrap installers are
+served from <code>https://obi.menhera.org/</code>.</p>
 <p>Use:</p>
 <pre><code class="language-sh">./build-release.sh
 </code></pre>

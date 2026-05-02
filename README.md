@@ -4,7 +4,7 @@
 
 The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
 
-**Status:** early development. CLI, wire protocol, and library APIs are unstable until `0.1.0`.
+**Status:** `v0.1.0` is published on crates.io and tagged on GitHub. The user-facing CLI and `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1` protocol capabilities are the first released baseline; breaking protocol changes should use new capability names.
 
 ## What it is
 

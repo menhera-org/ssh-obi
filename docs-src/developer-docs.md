@@ -57,6 +57,10 @@ Pages after each build:
 
 ## Release Builds
 
+The first published release is `v0.1.0`. It is published to crates.io and
+tagged on GitHub as `v0.1.0`. Release tarballs for the bootstrap installers are
+served from `https://obi.menhera.org/`.
+
 Use:
 
 ```sh

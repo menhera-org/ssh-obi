@@ -5,8 +5,22 @@ bootstrap scripts download those tarballs and install binaries into
 `~/.ssh-obi/bin` on Unix-like systems or `%USERPROFILE%\.ssh-obi\bin` on
 Windows.
 
+The crate is also published on crates.io as `ssh-obi`.
+
 Signature verification is not implemented for the MVP. The bootstrap trusts
 HTTPS.
+
+## Local Client Install From crates.io
+
+If you already have a Rust toolchain, install the local client with:
+
+```sh
+cargo install ssh-obi
+```
+
+This installs the client binary, `ssh-obi`. It does not install the remote
+server binary by default. For normal use, let the client bootstrap or update
+the remote server component when you connect.
 
 ## Unix Install
 
