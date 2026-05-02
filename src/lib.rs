@@ -6,4 +6,5 @@ pub mod protocol;
 pub mod pty;
 pub mod server;
 pub mod session;
+pub mod terminal;
 pub mod transport;

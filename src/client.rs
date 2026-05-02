@@ -15,6 +15,7 @@ use crate::protocol::{
 use crate::session::{
     AutoSelection, SessionIdError, SessionInfo, auto_select, render_session_table,
 };
+use crate::terminal::{RawModeGuard, TerminalError};
 use crate::transport::{FramedReader, FramedWriter};
 
 pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
@@ -260,6 +261,7 @@ where
     R: Read,
     W: Write + Send + 'static,
 {
+    let _raw_mode = enable_stdin_raw_mode()?;
     let _stdin_thread = thread::spawn(move || copy_stdin_to_pty(writer));
     let mut framed_reader = FramedReader::new(reader);
     let mut stdout = io::stdout().lock();
@@ -299,6 +301,16 @@ where
     }
 
     Err(ClientRunError::UnexpectedBrokerEof)
+}
+
+#[cfg(unix)]
+fn enable_stdin_raw_mode() -> Result<Option<RawModeGuard<std::io::Stdin>>, ClientRunError> {
+    RawModeGuard::enable(io::stdin()).map_err(ClientRunError::Terminal)
+}
+
+#[cfg(not(unix))]
+fn enable_stdin_raw_mode() -> Result<Option<RawModeGuard>, ClientRunError> {
+    RawModeGuard::enable().map_err(ClientRunError::Terminal)
 }
 
 fn copy_stdin_to_pty<W>(writer: W) -> Result<(), ClientRunError>
@@ -545,6 +557,7 @@ pub enum ClientRunError {
     WaitSsh(io::Error),
     CopyStdin(io::Error),
     CopyStdout(io::Error),
+    Terminal(TerminalError),
     WindowSize(io::Error),
     MissingExitStatus,
 }
@@ -580,6 +593,7 @@ impl fmt::Display for ClientRunError {
             Self::WaitSsh(err) => write!(f, "failed to wait for ssh: {err}"),
             Self::CopyStdin(err) => write!(f, "failed to copy stdin to session: {err}"),
             Self::CopyStdout(err) => write!(f, "failed to copy ssh stdout: {err}"),
+            Self::Terminal(err) => write!(f, "{err}"),
             Self::WindowSize(err) => write!(f, "failed to read terminal window size: {err}"),
             Self::MissingExitStatus => write!(f, "session ended without an exit status"),
         }
@@ -597,6 +611,7 @@ impl std::error::Error for ClientRunError {
             | Self::CopyStdin(err)
             | Self::CopyStdout(err)
             | Self::WindowSize(err) => Some(err),
+            Self::Terminal(err) => Some(err),
             Self::Protocol(err) => Some(err),
             Self::InvalidSession(err) => Some(err),
             _ => None,

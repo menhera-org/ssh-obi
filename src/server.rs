@@ -32,7 +32,7 @@ pub fn run_broker_stdio() -> Result<(), ServerError> {
 
 pub fn handle_broker_request<R, W>(reader: R, writer: W, uid: u32) -> Result<(), ServerError>
 where
-    R: Read + Send,
+    R: Read + Send + 'static,
     W: Write + Send,
 {
     let mut reader = FramedReader::new(reader);
@@ -211,59 +211,52 @@ fn proxy_attached_session<R, W>(
     daemon: std::os::unix::net::UnixStream,
 ) -> Result<(), ServerError>
 where
-    R: Read + Send,
+    R: Read + Send + 'static,
     W: Write + Send,
 {
     use std::net::Shutdown;
 
     let daemon_reader = daemon.try_clone().map_err(ServerError::Connect)?;
-    std::thread::scope(|scope| {
-        let daemon_to_client = scope.spawn(move || -> Result<(), ServerError> {
-            let mut daemon_reader = FramedReader::new(daemon_reader);
-            let mut client_writer = FramedWriter::new(client_writer);
+    let daemon_writer = daemon.try_clone().map_err(ServerError::Connect)?;
+    let _client_to_daemon = std::thread::spawn(move || -> Result<(), ServerError> {
+        let mut daemon_writer = FramedWriter::new(daemon_writer);
+        while let Some(frame) = client_reader.read_frame()? {
+            let should_close = frame.msg_type() == MessageType::DETACH;
+            daemon_writer.write_frame(&frame)?;
+            daemon_writer.flush()?;
 
-            while let Some(frame) = daemon_reader.read_frame()? {
-                let should_close = matches!(
-                    frame.msg_type(),
-                    msg if msg == MessageType::CLIENT_SHOULD_EXIT
-                        || msg == MessageType::EXIT_STATUS
-                        || msg == MessageType::SESSION_BUSY
-                        || msg == MessageType::ERROR
-                );
-                client_writer.write_frame(&frame)?;
-                client_writer.flush()?;
-
-                if should_close {
-                    break;
-                }
+            if should_close {
+                break;
             }
+        }
 
-            Ok(())
-        });
+        let daemon = daemon_writer.into_inner();
+        let _ = daemon.shutdown(Shutdown::Write);
+        Ok(())
+    });
 
-        let client_to_daemon = (|| -> Result<(), ServerError> {
-            let mut daemon_writer = FramedWriter::new(daemon);
-            while let Some(frame) = client_reader.read_frame()? {
-                let should_close = frame.msg_type() == MessageType::DETACH;
-                daemon_writer.write_frame(&frame)?;
-                daemon_writer.flush()?;
+    let mut daemon_reader = FramedReader::new(daemon_reader);
+    let mut client_writer = FramedWriter::new(client_writer);
 
-                if should_close {
-                    break;
-                }
-            }
+    while let Some(frame) = daemon_reader.read_frame()? {
+        let should_close = matches!(
+            frame.msg_type(),
+            msg if msg == MessageType::CLIENT_SHOULD_EXIT
+                || msg == MessageType::EXIT_STATUS
+                || msg == MessageType::SESSION_BUSY
+                || msg == MessageType::ERROR
+        );
+        client_writer.write_frame(&frame)?;
+        client_writer.flush()?;
 
-            let daemon = daemon_writer.into_inner();
-            let _ = daemon.shutdown(Shutdown::Write);
-            Ok(())
-        })();
+        if should_close {
+            let _ = daemon.shutdown(Shutdown::Both);
+            return Ok(());
+        }
+    }
 
-        let daemon_to_client = daemon_to_client
-            .join()
-            .map_err(|_| ServerError::ProxyThreadPanicked)?;
-        client_to_daemon?;
-        daemon_to_client
-    })
+    let _ = daemon.shutdown(Shutdown::Both);
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -364,7 +357,6 @@ pub enum ServerError {
         expected: u32,
         actual: u32,
     },
-    ProxyThreadPanicked,
     UnsupportedPlatform(&'static str),
     SocketPath(SocketPathError),
     SessionId(SessionIdError),
@@ -396,7 +388,6 @@ impl fmt::Display for ServerError {
                     "broker uid mismatch: request used uid {actual}, expected {expected}"
                 )
             }
-            Self::ProxyThreadPanicked => write!(f, "broker proxy thread panicked"),
             Self::UnsupportedPlatform(reason) => write!(f, "{reason}"),
             Self::SocketPath(err) => write!(f, "{err}"),
             Self::SessionId(err) => write!(f, "{err}"),
@@ -444,7 +435,7 @@ mod tests {
     use crate::session::prepare_socket_dir;
     use std::fs;
     use std::io::Cursor;
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -641,6 +632,93 @@ mod tests {
 
         daemon.join().unwrap();
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn broker_attach_returns_when_daemon_exits_even_if_client_input_stays_open() {
+        let uid = current_uid();
+        let socket_dir = socket_dir_for_uid(uid);
+        prepare_socket_dir(&socket_dir, uid).unwrap();
+        let path = socket_path(&socket_dir, "bbbbbbbb").unwrap();
+        let _ = fs::remove_file(&path);
+        let listener = match UnixListener::bind(&path) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping Unix socket test because bind is not permitted here");
+                return;
+            }
+            Err(err) => panic!("failed to bind test Unix socket: {err}"),
+        };
+
+        let daemon = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let reader_stream = stream.try_clone().unwrap();
+            let mut reader = FramedReader::new(reader_stream);
+            let frame = reader.read_frame().unwrap().unwrap();
+            assert_eq!(frame.msg_type(), MessageType::BROKER_ATTACH);
+
+            let mut writer = FramedWriter::new(stream);
+            writer
+                .write_body(
+                    MessageType::EXIT_STATUS,
+                    0,
+                    &ExitStatus {
+                        code: Some(0),
+                        signal: None,
+                    },
+                )
+                .unwrap();
+            writer.flush().unwrap();
+        });
+
+        let (mut client_write, client_read) = UnixStream::pair().unwrap();
+        let hold_client_write_open = client_write.try_clone().unwrap();
+        {
+            let mut writer = FramedWriter::new(&mut client_write);
+            writer
+                .write_body(
+                    MessageType::ATTACH_SESSION,
+                    0,
+                    &AttachSessionRequest {
+                        session_id: "bbbbbbbb".to_string(),
+                    },
+                )
+                .unwrap();
+            writer.flush().unwrap();
+        }
+
+        let broker = thread::spawn(move || {
+            let mut response = Vec::new();
+            handle_broker_request(client_read, &mut response, uid).unwrap();
+            response
+        });
+
+        daemon.join().unwrap();
+        let response = join_with_timeout(broker, std::time::Duration::from_secs(2))
+            .expect("broker should return after daemon sends exit status");
+
+        let mut reader = FramedReader::new(response.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::EXIT_STATUS);
+        let _: ExitStatus = frame.decode_body().unwrap();
+
+        drop(hold_client_write_open);
+        let _ = fs::remove_file(&path);
+    }
+
+    fn join_with_timeout<T>(
+        thread: thread::JoinHandle<T>,
+        timeout: std::time::Duration,
+    ) -> Option<T> {
+        let started = std::time::Instant::now();
+        while !thread.is_finished() {
+            if started.elapsed() >= timeout {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        Some(thread.join().ok().unwrap())
     }
 
     fn test_listener(name: &str) -> Option<(UnixListener, std::path::PathBuf)> {
