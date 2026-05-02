@@ -1,5 +1,5 @@
 use std::fmt;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 
 use crate::protocol::WindowSize;
 
@@ -66,11 +66,12 @@ pub fn spawn_pty_command(
         .map(|cwd| CString::new(cwd).map_err(|_| PtyError::NulByte("cwd")))
         .transpose()?;
 
+    let termios = interactive_termios()?;
     let winsize = size.map(to_nix_winsize);
     // SAFETY: forkpty is called before this function starts any threads. The child branch only
     // applies prebuilt environment overrides, invokes execvp with prebuilt C strings, then _exit
     // if setup or exec fails.
-    match unsafe { nix::pty::forkpty(winsize.as_ref(), None) }.map_err(PtyError::Fork)? {
+    match unsafe { nix::pty::forkpty(winsize.as_ref(), Some(&termios)) }.map_err(PtyError::Fork)? {
         ForkptyResult::Parent { child, master } => Ok(PtyChild { master, child }),
         ForkptyResult::Child => {
             if let Some(cwd) = &cwd
@@ -93,6 +94,91 @@ pub fn spawn_pty_command(
             unsafe { nix::libc::_exit(127) };
         }
     }
+}
+
+#[cfg(all(unix, not(target_os = "aix")))]
+fn interactive_termios() -> Result<nix::sys::termios::Termios, PtyError> {
+    use nix::sys::termios::{
+        BaudRate, ControlFlags, InputFlags, LocalFlags, OutputFlags, SpecialCharacterIndices,
+        cfsetspeed, tcgetattr,
+    };
+
+    let pair = nix::pty::openpty(None, None).map_err(PtyError::Open)?;
+    let mut termios = tcgetattr(pair.slave.as_fd()).map_err(PtyError::Termios)?;
+
+    termios.input_flags.remove(
+        InputFlags::IGNBRK
+            | InputFlags::IGNCR
+            | InputFlags::INLCR
+            | InputFlags::ISTRIP
+            | InputFlags::IXOFF
+            | InputFlags::PARMRK,
+    );
+    termios
+        .input_flags
+        .insert(InputFlags::BRKINT | InputFlags::ICRNL | InputFlags::IXON);
+    #[cfg(not(any(target_os = "redox", target_os = "haiku")))]
+    termios.input_flags.insert(InputFlags::IMAXBEL);
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    termios.input_flags.insert(InputFlags::IUTF8);
+
+    termios
+        .output_flags
+        .insert(OutputFlags::OPOST | OutputFlags::ONLCR);
+
+    termios
+        .control_flags
+        .remove(ControlFlags::CSIZE | ControlFlags::PARENB);
+    termios
+        .control_flags
+        .insert(ControlFlags::CREAD | ControlFlags::CS8);
+
+    termios
+        .local_flags
+        .remove(LocalFlags::ECHONL | LocalFlags::NOFLSH | LocalFlags::TOSTOP);
+    termios
+        .local_flags
+        .insert(LocalFlags::ECHO | LocalFlags::ECHOE | LocalFlags::ECHOK);
+    #[cfg(not(target_os = "redox"))]
+    termios.local_flags.insert(LocalFlags::ECHOKE);
+    #[cfg(not(any(target_os = "redox", target_os = "cygwin")))]
+    termios.local_flags.insert(LocalFlags::ECHOCTL);
+    termios
+        .local_flags
+        .insert(LocalFlags::ICANON | LocalFlags::IEXTEN | LocalFlags::ISIG);
+
+    set_control_char(&mut termios, SpecialCharacterIndices::VEOF, 4);
+    set_control_char(&mut termios, SpecialCharacterIndices::VEOL, 0);
+    set_control_char(&mut termios, SpecialCharacterIndices::VERASE, 127);
+    set_control_char(&mut termios, SpecialCharacterIndices::VINTR, 3);
+    set_control_char(&mut termios, SpecialCharacterIndices::VKILL, 21);
+    set_control_char(&mut termios, SpecialCharacterIndices::VMIN, 1);
+    set_control_char(&mut termios, SpecialCharacterIndices::VQUIT, 28);
+    set_control_char(&mut termios, SpecialCharacterIndices::VSTART, 17);
+    set_control_char(&mut termios, SpecialCharacterIndices::VSTOP, 19);
+    set_control_char(&mut termios, SpecialCharacterIndices::VSUSP, 26);
+    set_control_char(&mut termios, SpecialCharacterIndices::VTIME, 0);
+    #[cfg(not(target_os = "haiku"))]
+    set_control_char(&mut termios, SpecialCharacterIndices::VLNEXT, 22);
+    #[cfg(not(target_os = "haiku"))]
+    set_control_char(&mut termios, SpecialCharacterIndices::VREPRINT, 18);
+    #[cfg(not(any(target_os = "aix", target_os = "haiku")))]
+    set_control_char(&mut termios, SpecialCharacterIndices::VDISCARD, 15);
+    #[cfg(not(any(target_os = "aix", target_os = "haiku")))]
+    set_control_char(&mut termios, SpecialCharacterIndices::VWERASE, 23);
+
+    cfsetspeed(&mut termios, BaudRate::B38400).map_err(PtyError::Termios)?;
+
+    Ok(termios)
+}
+
+#[cfg(all(unix, not(target_os = "aix")))]
+fn set_control_char(
+    termios: &mut nix::sys::termios::Termios,
+    index: nix::sys::termios::SpecialCharacterIndices,
+    value: nix::libc::cc_t,
+) {
+    termios.control_chars[index as usize] = value;
 }
 
 #[cfg(all(unix, not(target_os = "aix")))]
@@ -148,6 +234,7 @@ pub enum PtyError {
     Open(nix::errno::Errno),
     Fork(nix::errno::Errno),
     SetWindowSize(nix::errno::Errno),
+    Termios(nix::errno::Errno),
     NulByte(&'static str),
     InvalidEnvironmentName(String),
     UnsupportedPlatform(&'static str),
@@ -159,6 +246,7 @@ impl fmt::Display for PtyError {
             Self::Open(err) => write!(f, "failed to open PTY: {err}"),
             Self::Fork(err) => write!(f, "failed to fork PTY child: {err}"),
             Self::SetWindowSize(err) => write!(f, "failed to set PTY window size: {err}"),
+            Self::Termios(err) => write!(f, "failed to configure PTY terminal settings: {err}"),
             Self::NulByte(field) => write!(f, "PTY {field} contains a NUL byte"),
             Self::InvalidEnvironmentName(name) => {
                 write!(f, "environment variable name contains '=': {name}")
@@ -202,6 +290,29 @@ mod tests {
         .unwrap();
 
         drop(pair);
+    }
+
+    #[cfg(all(unix, not(target_os = "aix")))]
+    #[test]
+    fn interactive_termios_is_sane_for_line_editing() {
+        use nix::sys::termios::{
+            ControlFlags, InputFlags, LocalFlags, OutputFlags, SpecialCharacterIndices,
+        };
+
+        let termios = interactive_termios().unwrap();
+
+        assert!(termios.input_flags.contains(InputFlags::ICRNL));
+        assert!(termios.output_flags.contains(OutputFlags::OPOST));
+        assert!(termios.output_flags.contains(OutputFlags::ONLCR));
+        assert!(termios.control_flags.contains(ControlFlags::CREAD));
+        assert!(termios.control_flags.contains(ControlFlags::CS8));
+        assert!(termios.local_flags.contains(LocalFlags::ECHO));
+        assert!(termios.local_flags.contains(LocalFlags::ICANON));
+        assert!(termios.local_flags.contains(LocalFlags::ISIG));
+        assert_eq!(
+            termios.control_chars[SpecialCharacterIndices::VERASE as usize],
+            127
+        );
     }
 
     #[cfg(all(unix, not(target_os = "aix")))]
