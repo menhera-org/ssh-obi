@@ -1,4 +1,5 @@
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -68,7 +69,23 @@ impl std::error::Error for SessionIdError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketPathError {
     InvalidSessionId(SessionIdError),
-    TooLong { len: usize, max: usize },
+    TooLong {
+        len: usize,
+        max: usize,
+    },
+    Io(String),
+    NotDirectory(PathBuf),
+    WrongOwner {
+        path: PathBuf,
+        expected: u32,
+        actual: u32,
+    },
+    WrongMode {
+        path: PathBuf,
+        expected: u32,
+        actual: u32,
+    },
+    UnsupportedPlatform(&'static str),
 }
 
 impl fmt::Display for SocketPathError {
@@ -78,6 +95,29 @@ impl fmt::Display for SocketPathError {
             Self::TooLong { len, max } => {
                 write!(f, "socket path is too long: {len} bytes exceeds {max}")
             }
+            Self::Io(message) => write!(f, "{message}"),
+            Self::NotDirectory(path) => {
+                write!(f, "socket path is not a directory: {}", path.display())
+            }
+            Self::WrongOwner {
+                path,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "socket directory {} is owned by uid {actual}, expected {expected}",
+                path.display()
+            ),
+            Self::WrongMode {
+                path,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "socket directory {} has mode {actual:o}, expected {expected:o}",
+                path.display()
+            ),
+            Self::UnsupportedPlatform(reason) => write!(f, "{reason}"),
         }
     }
 }
@@ -116,6 +156,146 @@ pub fn socket_path(
     }
 
     Ok(path)
+}
+
+pub fn session_id_from_socket_path(path: impl AsRef<Path>) -> Result<SessionId, SessionIdError> {
+    let Some(file_name) = path.as_ref().file_name().and_then(|value| value.to_str()) else {
+        return Err(SessionIdError::InvalidCharacter);
+    };
+
+    let Some(session_id) = file_name.strip_suffix(".sock") else {
+        return Err(SessionIdError::InvalidCharacter);
+    };
+
+    SessionId::new(session_id)
+}
+
+pub fn list_session_socket_ids(
+    socket_dir: impl AsRef<Path>,
+) -> Result<Vec<SessionId>, SocketPathError> {
+    let socket_dir = socket_dir.as_ref();
+    let mut sessions = Vec::new();
+
+    match fs::read_dir(socket_dir) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.map_err(|err| {
+                    SocketPathError::Io(format!(
+                        "failed to read socket directory {}: {err}",
+                        socket_dir.display()
+                    ))
+                })?;
+
+                if let Ok(session_id) = session_id_from_socket_path(entry.path()) {
+                    sessions.push(session_id);
+                }
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(SocketPathError::Io(format!(
+                "failed to read socket directory {}: {err}",
+                socket_dir.display()
+            )));
+        }
+    }
+
+    sessions.sort();
+    Ok(sessions)
+}
+
+#[cfg(unix)]
+pub fn prepare_socket_dir(
+    socket_dir: impl AsRef<Path>,
+    expected_uid: u32,
+) -> Result<(), SocketPathError> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+    let socket_dir = socket_dir.as_ref();
+    if !socket_dir.exists() {
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(socket_dir)
+            .map_err(|err| {
+                SocketPathError::Io(format!(
+                    "failed to create socket directory {}: {err}",
+                    socket_dir.display()
+                ))
+            })?;
+    }
+
+    let metadata = fs::metadata(socket_dir).map_err(|err| {
+        SocketPathError::Io(format!(
+            "failed to stat socket directory {}: {err}",
+            socket_dir.display()
+        ))
+    })?;
+
+    if !metadata.is_dir() {
+        return Err(SocketPathError::NotDirectory(socket_dir.to_path_buf()));
+    }
+
+    let actual_uid = metadata.uid();
+    if actual_uid != expected_uid {
+        return Err(SocketPathError::WrongOwner {
+            path: socket_dir.to_path_buf(),
+            expected: expected_uid,
+            actual: actual_uid,
+        });
+    }
+
+    let actual_mode = metadata.permissions().mode() & 0o777;
+    if actual_mode != 0o700 {
+        return Err(SocketPathError::WrongMode {
+            path: socket_dir.to_path_buf(),
+            expected: 0o700,
+            actual: actual_mode,
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn prepare_socket_dir(
+    _socket_dir: impl AsRef<Path>,
+    _expected_uid: u32,
+) -> Result<(), SocketPathError> {
+    Err(SocketPathError::UnsupportedPlatform(
+        "server socket directories require Unix permissions",
+    ))
+}
+
+#[cfg(unix)]
+pub fn remove_stale_socket(path: impl AsRef<Path>) -> Result<bool, SocketPathError> {
+    use std::os::unix::net::UnixStream;
+
+    let path = path.as_ref();
+    match UnixStream::connect(path) {
+        Ok(_stream) => Ok(false),
+        Err(err) if err.kind() == std::io::ErrorKind::ConnectionRefused => {
+            fs::remove_file(path).map_err(|err| {
+                SocketPathError::Io(format!(
+                    "failed to remove stale socket {}: {err}",
+                    path.display()
+                ))
+            })?;
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(SocketPathError::Io(format!(
+            "failed to probe socket {}: {err}",
+            path.display()
+        ))),
+    }
+}
+
+#[cfg(not(unix))]
+pub fn remove_stale_socket(_path: impl AsRef<Path>) -> Result<bool, SocketPathError> {
+    Err(SocketPathError::UnsupportedPlatform(
+        "server sockets require Unix-domain sockets",
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,5 +533,89 @@ mod tests {
         let dir = "/tmp/".to_string() + &"x".repeat(SOCKET_PATH_LIMIT);
         let err = socket_path(dir, "aaaaaaaa").unwrap_err();
         assert!(matches!(err, SocketPathError::TooLong { .. }));
+    }
+
+    #[test]
+    fn session_id_from_socket_path_requires_sock_suffix() {
+        assert_eq!(
+            session_id_from_socket_path("/tmp/ssh-obi-1/aaaaaaaa.sock").unwrap(),
+            SessionId::new("aaaaaaaa").unwrap()
+        );
+        assert!(session_id_from_socket_path("/tmp/ssh-obi-1/aaaaaaaa.txt").is_err());
+    }
+
+    #[test]
+    fn list_session_socket_ids_filters_and_sorts() {
+        let dir = test_dir("list-session-socket-ids");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("bbbbbbbb.sock"), "").unwrap();
+        fs::write(dir.join("not-a-session.sock"), "").unwrap();
+        fs::write(dir.join("aaaaaaaa.sock"), "").unwrap();
+        fs::write(dir.join("cccccccc.txt"), "").unwrap();
+
+        let sessions = list_session_socket_ids(&dir).unwrap();
+        assert_eq!(
+            sessions,
+            vec![
+                SessionId::new("aaaaaaaa").unwrap(),
+                SessionId::new("bbbbbbbb").unwrap()
+            ]
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_socket_dir_creates_private_directory() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let dir = test_dir("prepare-socket-dir");
+        let uid = current_uid();
+        prepare_socket_dir(&dir, uid).unwrap();
+
+        let metadata = fs::metadata(&dir).unwrap();
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_socket_dir_rejects_wrong_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = test_dir("prepare-socket-dir-wrong-mode");
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let err = prepare_socket_dir(&dir, current_uid()).unwrap_err();
+        assert!(matches!(
+            err,
+            SocketPathError::WrongMode { actual: 0o755, .. }
+        ));
+
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn current_uid() -> u32 {
+        use std::os::unix::fs::MetadataExt;
+
+        fs::metadata(".").unwrap().uid()
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("ssh-obi-{name}-{}-{unique}", std::process::id()))
     }
 }
