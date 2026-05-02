@@ -3,8 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Page not found - ssh-obi documentation</title>
-        <base href="/">
+        <title>Installation - ssh-obi documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -175,14 +174,102 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="document-not-found-404"><a class="header" href="#document-not-found-404">Document not found (404)</a></h1>
-<p>This URL is invalid, sorry. Please use the navigation bar or search to continue.</p>
+                        <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
+<p><code>ssh-obi</code> publishes release tarballs at <code>https://obi.menhera.org/</code>. The
+bootstrap scripts download those tarballs and install binaries into
+<code>~/.ssh-obi/bin</code> on Unix-like systems or <code>%USERPROFILE%\.ssh-obi\bin</code> on
+Windows.</p>
+<p>Signature verification is not implemented for the MVP. The bootstrap trusts
+HTTPS.</p>
+<h2 id="unix-install"><a class="header" href="#unix-install">Unix Install</a></h2>
+<p>To preinstall or update a Unix-like account without starting a session:</p>
+<pre><code class="language-sh">wget -O - https://obi.menhera.org/bootstrap.sh | sh -s -- --install
+</code></pre>
+<p>The <code>sh -s -- --install</code> form is deliberate and portable:</p>
+<ul>
+<li><code>-s</code> tells a POSIX shell to read the script from standard input.</li>
+<li>The first <code>--</code> ends shell option parsing.</li>
+<li>The second <code>--install</code> is passed to the bootstrap script.</li>
+</ul>
+<p>Do not use <code>sh - -- --install</code>. Portable <code>/bin/sh</code> implementations treat the
+first <code>--</code> as a script filename, not as “read from stdin”.</p>
+<p>The Unix installer:</p>
+<ol>
+<li>Detects the OS and CPU.</li>
+<li>Downloads <code>release-&lt;target&gt;.tar.gz</code>.</li>
+<li>Extracts <code>ssh-obi-server</code> and, when present, <code>ssh-obi</code>.</li>
+<li>Installs binaries into <code>~/.ssh-obi/bin</code>.</li>
+<li>Adds that directory to shell startup files used by non-interactive SSH:
+<code>~/.bashrc</code>, <code>~/.zshenv</code>, and fish <code>conf.d</code>.</li>
+<li>Prints <code>OBI-INSTALL-COMPLETE</code> in install-only mode.</li>
+</ol>
+<p>The bootstrap does not edit <code>~/.bash_profile</code>, because <code>ssh-obi</code> needs paths
+available to non-interactive remote commands.</p>
+<h2 id="install-during-connect"><a class="header" href="#install-during-connect">Install During Connect</a></h2>
+<p>Most users do not need to run the Unix bootstrap manually. The local client
+handles the remote check during normal connection:</p>
+<pre><code class="language-sh">ssh-obi user@example.com
+</code></pre>
+<p>If the remote server component is missing or incompatible, the local client asks
+for confirmation and installs it into that remote account.</p>
+<h2 id="windows-client-install"><a class="header" href="#windows-client-install">Windows Client Install</a></h2>
+<p>Windows can run the client only. It cannot run the remote server.</p>
+<p>PowerShell is preferred:</p>
+<pre><code class="language-powershell">powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://obi.menhera.org/bootstrap.ps1 | iex"
+</code></pre>
+<p><code>cmd.exe</code> cannot execute a batch file directly from an HTTPS URL. Download the
+batch file, then run it:</p>
+<pre><code class="language-bat">curl.exe -fsSL -o "%TEMP%\ssh-obi-bootstrap.bat" https://obi.menhera.org/bootstrap.bat &amp;&amp; "%TEMP%\ssh-obi-bootstrap.bat" --install
+</code></pre>
+<p>Both Windows bootstraps:</p>
+<ul>
+<li>Support x86_64 Windows.</li>
+<li>Download <code>release-x86_64-pc-windows-msvc.tar.gz</code>.</li>
+<li>Install <code>ssh-obi.exe</code> into <code>%USERPROFILE%\.ssh-obi\bin</code>.</li>
+<li>Add that directory to the user’s PATH.</li>
+<li>Print <code>OBI-INSTALL-COMPLETE</code>.</li>
+<li>Never start a server.</li>
+</ul>
+<p>Restart the terminal if <code>ssh-obi.exe</code> is not found immediately after PATH
+updates.</p>
+<h2 id="manual-install-from-a-tarball"><a class="header" href="#manual-install-from-a-tarball">Manual Install From A Tarball</a></h2>
+<p>Manual install is also possible:</p>
+<pre><code class="language-sh">mkdir -p "$HOME/.ssh-obi/bin"
+gzip -dc release-x86_64-unknown-linux-musl.tar.gz | tar -xf - -C "$HOME/.ssh-obi/bin"
+</code></pre>
+<p>For Unix server-capable targets, the tarball contains:</p>
+<ul>
+<li><code>LICENSE-APACHE</code></li>
+<li><code>LICENSE-MPL</code></li>
+<li><code>ssh-obi</code></li>
+<li><code>ssh-obi-server</code></li>
+</ul>
+<p>For Windows client-only targets, the tarball contains:</p>
+<ul>
+<li><code>LICENSE-APACHE</code></li>
+<li><code>LICENSE-MPL</code></li>
+<li><code>ssh-obi.exe</code></li>
+</ul>
+<h2 id="uninstall"><a class="header" href="#uninstall">Uninstall</a></h2>
+<p>Remove the install directory:</p>
+<pre><code class="language-sh">rm -rf "$HOME/.ssh-obi"
+</code></pre>
+<p>Then remove the <code>ssh-obi</code> PATH lines from any shell startup files that the
+installer updated.</p>
+<p>On Windows, delete <code>%USERPROFILE%\.ssh-obi</code> and remove that directory from the
+user PATH.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="getting-started.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
+                            <a rel="next prefetch" href="usage.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -190,7 +277,13 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="getting-started.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
+                    <a rel="next prefetch" href="usage.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>

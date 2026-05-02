@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4b2ea111.js";
+            window.path_to_searchindex_js = "searchindex-fa2ee870.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-4f749792.js"></script>
+        <script src="toc-6266f562.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,9 +175,501 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="overview"><a class="header" href="#overview">Overview</a></h1>
+                        <h1 id="ssh-obi"><a class="header" href="#ssh-obi">ssh-obi</a></h1>
+<p><code>ssh-obi</code> keeps SSH shells alive when the connection drops, when a laptop
+sleeps, or when the client moves between networks.</p>
+<p>It is designed to feel like plain SSH:</p>
+<ul>
+<li>Use the same destination names, keys, jump hosts, and SSH config you already
+use.</li>
+<li>Keep using your local terminal scrollback, search, selection, and copy/paste.</li>
+<li>Reconnect to the same remote shell after a network break.</li>
+<li>Keep several independent sessions on the same remote account.</li>
+<li>Install per user, without a root service or a custom network port.</li>
+</ul>
+<p><code>ssh-obi</code> is intentionally not a terminal window manager. It does not implement
+panes, tabs, or in-band escape commands. If you want window management, run
+<code>tmux</code> or another multiplexer inside the remote shell.</p>
+<h2 id="status"><a class="header" href="#status">Status</a></h2>
+<p><code>ssh-obi</code> is in early development. Commands and release details may still
+change before the first <code>0.1.0</code> release is finalized.</p>
+<p>The documentation on this site is the user-facing source for the published
+bootstrap scripts and release tarballs at <code>https://obi.menhera.org/</code>.</p>
+<h2 id="quick-examples"><a class="header" href="#quick-examples">Quick Examples</a></h2>
+<p>Connect to a host:</p>
+<pre><code class="language-sh">ssh-obi user@example.com
+</code></pre>
+<p>Create a new session even if free sessions already exist:</p>
+<pre><code class="language-sh">ssh-obi --new user@example.com
+</code></pre>
+<p>List existing sessions without attaching:</p>
+<pre><code class="language-sh">ssh-obi --list user@example.com
+</code></pre>
+<p>Detach the currently attached client for a known session from your local
+machine:</p>
+<pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
+</code></pre>
+<p>Or detach from inside the remote shell without killing it:</p>
+<pre><code class="language-sh">ssh-obi-server --detach
+</code></pre>
+<h2 id="what-to-expect"><a class="header" href="#what-to-expect">What To Expect</a></h2>
+<ul>
+<li>A network disconnect does not kill the remote shell.</li>
+<li>Remote output continues to be collected while you are detached.</li>
+<li>Recent output is replayed on reconnect.</li>
+<li>Some recently displayed output may appear twice after reconnect.</li>
+<li>Windows is a client-only platform. Remote servers are Unix-like systems.</li>
+</ul>
+<h2 id="what-to-read-next"><a class="header" href="#what-to-read-next">What To Read Next</a></h2>
+<ul>
+<li><a href="#getting-started">Getting Started</a> for the shortest usable flow.</li>
+<li><a href="#installation">Installation</a> for Unix and Windows bootstrap commands.</li>
+<li><a href="#connecting">Connecting</a> for commands and session selection.</li>
+<li><a href="#sessions">Sessions</a> for detach, reconnect, replay, and exit
+behavior.</li>
+<li><a href="#platforms-and-downloads">Platforms and Downloads</a> for supported systems and
+published tarball names.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="example-topic"><a class="header" href="#example-topic">Example topic</a></h1>
+<h1 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h1>
+<p>This page assumes you already have a local <code>ssh-obi</code> client. If you do not, see
+<a href="#installation">Installation</a>.</p>
+<h2 id="first-connect"><a class="header" href="#first-connect">First Connect</a></h2>
+<p>Run:</p>
+<pre><code class="language-sh">ssh-obi user@example.com
+</code></pre>
+<p>The client starts the system <code>ssh</code> binary and prepares the remote side over the
+same SSH connection. If a compatible server component is already installed, the
+session starts immediately.</p>
+<p>If the server component is missing or incompatible, <code>ssh-obi</code> asks before
+installing it into <code>~/.ssh-obi/bin</code> on the remote account. No root access is
+needed.</p>
+<p>After installation, <code>ssh-obi</code> attaches to a new or existing session.</p>
+<h2 id="session-selection"><a class="header" href="#session-selection">Session Selection</a></h2>
+<p>When you connect, <code>ssh-obi</code> looks for sessions owned by the same remote user.</p>
+<p>If no free session exists, a new session is created.</p>
+<p>If exactly one free session exists, the client attaches to it automatically.</p>
+<p>If multiple free sessions exist, the client prompts locally:</p>
+<pre><code class="language-text">Select a session to attach:
+
+  #   INIT                 DETACH               WHAT
+  1   2026-05-01 09:14     2026-05-02 11:02     bash
+  2   2026-05-01 14:30     2026-05-02 09:55     vim notes.md
+  3   2026-05-02 10:11     2026-05-02 10:48     cargo watch
+  n   (new session)
+
+&gt;
+</code></pre>
+<p>Busy sessions are shown by <code>--list</code>, but they are not selectable in the
+interactive picker.</p>
+<h2 id="detach-without-killing-the-shell"><a class="header" href="#detach-without-killing-the-shell">Detach Without Killing The Shell</a></h2>
+<p>From inside the remote shell:</p>
+<pre><code class="language-sh">ssh-obi-server --detach
+</code></pre>
+<p>This detaches the client. The shell keeps running. The local client exits with
+status 0 and does not reconnect.</p>
+<p>Closing the laptop, losing Wi-Fi, or killing the local SSH connection is
+different: the client treats that as ambiguous and attempts to reconnect.</p>
+<h2 id="reconnect-behavior"><a class="header" href="#reconnect-behavior">Reconnect Behavior</a></h2>
+<p>After the first successful attach, the client knows the session id. If the SSH
+connection disappears without a graceful detach or shell exit report, the
+client reconnects and asks for the same session.</p>
+<p>On reattach, recent output is replayed first, then live forwarding resumes. The
+replay buffer is bounded, so old history belongs in your local terminal
+scrollback.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
+<p><code>ssh-obi</code> publishes release tarballs at <code>https://obi.menhera.org/</code>. The
+bootstrap scripts download those tarballs and install binaries into
+<code>~/.ssh-obi/bin</code> on Unix-like systems or <code>%USERPROFILE%\.ssh-obi\bin</code> on
+Windows.</p>
+<p>Signature verification is not implemented for the MVP. The bootstrap trusts
+HTTPS.</p>
+<h2 id="unix-install"><a class="header" href="#unix-install">Unix Install</a></h2>
+<p>To preinstall or update a Unix-like account without starting a session:</p>
+<pre><code class="language-sh">wget -O - https://obi.menhera.org/bootstrap.sh | sh -s -- --install
+</code></pre>
+<p>The <code>sh -s -- --install</code> form is deliberate and portable:</p>
+<ul>
+<li><code>-s</code> tells a POSIX shell to read the script from standard input.</li>
+<li>The first <code>--</code> ends shell option parsing.</li>
+<li>The second <code>--install</code> is passed to the bootstrap script.</li>
+</ul>
+<p>Do not use <code>sh - -- --install</code>. Portable <code>/bin/sh</code> implementations treat the
+first <code>--</code> as a script filename, not as “read from stdin”.</p>
+<p>The Unix installer:</p>
+<ol>
+<li>Detects the OS and CPU.</li>
+<li>Downloads <code>release-&lt;target&gt;.tar.gz</code>.</li>
+<li>Extracts <code>ssh-obi-server</code> and, when present, <code>ssh-obi</code>.</li>
+<li>Installs binaries into <code>~/.ssh-obi/bin</code>.</li>
+<li>Adds that directory to shell startup files used by non-interactive SSH:
+<code>~/.bashrc</code>, <code>~/.zshenv</code>, and fish <code>conf.d</code>.</li>
+<li>Prints <code>OBI-INSTALL-COMPLETE</code> in install-only mode.</li>
+</ol>
+<p>The bootstrap does not edit <code>~/.bash_profile</code>, because <code>ssh-obi</code> needs paths
+available to non-interactive remote commands.</p>
+<h2 id="install-during-connect"><a class="header" href="#install-during-connect">Install During Connect</a></h2>
+<p>Most users do not need to run the Unix bootstrap manually. The local client
+handles the remote check during normal connection:</p>
+<pre><code class="language-sh">ssh-obi user@example.com
+</code></pre>
+<p>If the remote server component is missing or incompatible, the local client asks
+for confirmation and installs it into that remote account.</p>
+<h2 id="windows-client-install"><a class="header" href="#windows-client-install">Windows Client Install</a></h2>
+<p>Windows can run the client only. It cannot run the remote server.</p>
+<p>PowerShell is preferred:</p>
+<pre><code class="language-powershell">powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://obi.menhera.org/bootstrap.ps1 | iex"
+</code></pre>
+<p><code>cmd.exe</code> cannot execute a batch file directly from an HTTPS URL. Download the
+batch file, then run it:</p>
+<pre><code class="language-bat">curl.exe -fsSL -o "%TEMP%\ssh-obi-bootstrap.bat" https://obi.menhera.org/bootstrap.bat &amp;&amp; "%TEMP%\ssh-obi-bootstrap.bat" --install
+</code></pre>
+<p>Both Windows bootstraps:</p>
+<ul>
+<li>Support x86_64 Windows.</li>
+<li>Download <code>release-x86_64-pc-windows-msvc.tar.gz</code>.</li>
+<li>Install <code>ssh-obi.exe</code> into <code>%USERPROFILE%\.ssh-obi\bin</code>.</li>
+<li>Add that directory to the user’s PATH.</li>
+<li>Print <code>OBI-INSTALL-COMPLETE</code>.</li>
+<li>Never start a server.</li>
+</ul>
+<p>Restart the terminal if <code>ssh-obi.exe</code> is not found immediately after PATH
+updates.</p>
+<h2 id="manual-install-from-a-tarball"><a class="header" href="#manual-install-from-a-tarball">Manual Install From A Tarball</a></h2>
+<p>Manual install is also possible:</p>
+<pre><code class="language-sh">mkdir -p "$HOME/.ssh-obi/bin"
+gzip -dc release-x86_64-unknown-linux-musl.tar.gz | tar -xf - -C "$HOME/.ssh-obi/bin"
+</code></pre>
+<p>For Unix server-capable targets, the tarball contains:</p>
+<ul>
+<li><code>LICENSE-APACHE</code></li>
+<li><code>LICENSE-MPL</code></li>
+<li><code>ssh-obi</code></li>
+<li><code>ssh-obi-server</code></li>
+</ul>
+<p>For Windows client-only targets, the tarball contains:</p>
+<ul>
+<li><code>LICENSE-APACHE</code></li>
+<li><code>LICENSE-MPL</code></li>
+<li><code>ssh-obi.exe</code></li>
+</ul>
+<h2 id="uninstall"><a class="header" href="#uninstall">Uninstall</a></h2>
+<p>Remove the install directory:</p>
+<pre><code class="language-sh">rm -rf "$HOME/.ssh-obi"
+</code></pre>
+<p>Then remove the <code>ssh-obi</code> PATH lines from any shell startup files that the
+installer updated.</p>
+<p>On Windows, delete <code>%USERPROFILE%\.ssh-obi</code> and remove that directory from the
+user PATH.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="connecting"><a class="header" href="#connecting">Connecting</a></h1>
+<h2 id="basic-commands"><a class="header" href="#basic-commands">Basic Commands</a></h2>
+<p>Attach to an existing free session or create one if none exists:</p>
+<pre><code class="language-sh">ssh-obi user@example.com
+</code></pre>
+<p>Always create a new session:</p>
+<pre><code class="language-sh">ssh-obi --new user@example.com
+</code></pre>
+<p>Attach to a specific session:</p>
+<pre><code class="language-sh">ssh-obi --session abc123 user@example.com
+</code></pre>
+<p>List sessions and exit:</p>
+<pre><code class="language-sh">ssh-obi --list user@example.com
+</code></pre>
+<p>Detach the attached client for a specific session and exit:</p>
+<pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
+</code></pre>
+<p>Detach from inside the remote shell:</p>
+<pre><code class="language-sh">ssh-obi-server --detach
+</code></pre>
+<h2 id="using-ssh-options"><a class="header" href="#using-ssh-options">Using SSH Options</a></h2>
+<p><code>ssh-obi</code> invokes the system <code>ssh</code> binary and forwards common OpenSSH options
+before the destination.</p>
+<p>Examples:</p>
+<pre><code class="language-sh">ssh-obi -p 2222 user@example.com
+ssh-obi -i ~/.ssh/work_ed25519 user@example.com
+ssh-obi -J bastion.example.com user@app.example.com
+ssh-obi -F ~/.ssh/config work-host
+ssh-obi -o StrictHostKeyChecking=accept-new user@example.com
+ssh-obi -vv user@example.com
+</code></pre>
+<p>Common passthrough options include:</p>
+<ul>
+<li>Standalone flags such as <code>-4</code>, <code>-6</code>, <code>-A</code>, <code>-a</code>, <code>-C</code>, <code>-q</code>, <code>-T</code>, <code>-t</code>,
+<code>-X</code>, <code>-x</code>, <code>-Y</code>, and <code>-v</code>/<code>-vv</code>/<code>-vvv</code>.</li>
+<li>Options with values such as <code>-p</code>, <code>-i</code>, <code>-J</code>, <code>-F</code>, <code>-o</code>, <code>-l</code>, <code>-L</code>, <code>-R</code>,
+<code>-D</code>, and <code>-W</code>.</li>
+</ul>
+<p><code>ssh-obi</code> manages the remote command itself. Remote command arguments are not
+supported:</p>
+<pre><code class="language-sh">ssh-obi user@example.com uptime
+</code></pre>
+<p>Use plain <code>ssh</code> for one-shot remote commands.</p>
+<h2 id="picking-a-session"><a class="header" href="#picking-a-session">Picking A Session</a></h2>
+<p>Free sessions are selectable. Busy sessions may be displayed for awareness but
+are not assigned picker numbers.</p>
+<p>Columns:</p>
+<ul>
+<li><code>INIT</code>: when the session was created.</li>
+<li><code>DETACH</code>: when a client last detached, or <code>-</code> if it has never detached.</li>
+<li><code>WHAT</code>: best-effort foreground command detected for the session.</li>
+</ul>
+<p>The <code>WHAT</code> column is only a hint.</p>
+<h2 id="when-the-remote-shell-exits"><a class="header" href="#when-the-remote-shell-exits">When The Remote Shell Exits</a></h2>
+<p>If the remote shell exits while attached, the local client mirrors the exit
+status where possible.</p>
+<p>If the connection is lost before the client receives a shell-exit report, the
+client reconnects first. If the session is gone or no exit status can be
+recovered, the client reports failure rather than guessing success.</p>
+<p>A deliberate detach through <code>ssh-obi-server --detach</code> is graceful. The client
+exits with status 0 and does not reconnect.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="sessions"><a class="header" href="#sessions">Sessions</a></h1>
+<p>An <code>ssh-obi</code> session is one long-lived remote shell. The session can outlive
+many SSH connections.</p>
+<h2 id="creating-sessions"><a class="header" href="#creating-sessions">Creating Sessions</a></h2>
+<p>Use <code>ssh-obi user@host</code> to attach to a free session or create one when none is
+available.</p>
+<p>Use <code>ssh-obi --new user@host</code> to always create a new session.</p>
+<p>Use <code>ssh-obi --session ID user@host</code> to attach to a specific session.</p>
+<h2 id="busy-sessions"><a class="header" href="#busy-sessions">Busy Sessions</a></h2>
+<p>A session can have only one attached client. If another client is already
+attached, the session is busy.</p>
+<p>Busy sessions are still visible in <code>--list</code>. You can also ask a known busy
+session to detach its current client:</p>
+<pre><code class="language-sh">ssh-obi --detach --session ID user@host
+</code></pre>
+<h2 id="detach"><a class="header" href="#detach">Detach</a></h2>
+<p>Detach means “drop the client, keep the shell”.</p>
+<p>When the network drops, the remote shell keeps running and waits for another
+client.</p>
+<p>When the user runs:</p>
+<pre><code class="language-sh">ssh-obi-server --detach
+</code></pre>
+<p>the local client exits cleanly and does not reconnect.</p>
+<p>The shell is not sent SIGHUP.</p>
+<h2 id="output-while-detached"><a class="header" href="#output-while-detached">Output While Detached</a></h2>
+<p>Remote output continues to be collected while detached.</p>
+<p>This prevents commands that print output from getting stuck just because no
+client is attached.</p>
+<p>Detached output is kept in a bounded replay buffer. When the buffer fills, old
+bytes are evicted.</p>
+<h2 id="reconnect-and-replay"><a class="header" href="#reconnect-and-replay">Reconnect And Replay</a></h2>
+<p>After the first attach, the client knows the session id. On an ambiguous
+disconnect, it starts a fresh SSH connection and requests that same session.</p>
+<p>The session sends recent output, then resumes live forwarding. This can
+duplicate bytes the local terminal already displayed before the disconnect.
+That is acceptable and expected.</p>
+<p>Anything older than the replay buffer belongs in the local terminal scrollback.</p>
+<h2 id="shell-exit"><a class="header" href="#shell-exit">Shell Exit</a></h2>
+<p>When the shell exits, the session ends. A later <code>ssh-obi user@host</code> invocation
+will not list that session.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="platforms-and-downloads"><a class="header" href="#platforms-and-downloads">Platforms and Downloads</a></h1>
+<h2 id="local-client-platforms"><a class="header" href="#local-client-platforms">Local Client Platforms</a></h2>
+<p>Supported local client platforms:</p>
+<ul>
+<li>Linux</li>
+<li>macOS</li>
+<li>FreeBSD, NetBSD, and illumos where release artifacts are published</li>
+<li>Windows x86_64</li>
+</ul>
+<p>The client requires a working system <code>ssh</code> binary.</p>
+<h2 id="remote-server-platforms"><a class="header" href="#remote-server-platforms">Remote Server Platforms</a></h2>
+<p>Supported remote server platforms:</p>
+<ul>
+<li>Linux</li>
+<li>macOS</li>
+<li>FreeBSD</li>
+<li>NetBSD</li>
+<li>illumos</li>
+</ul>
+<p>The server component is not supported on Windows.</p>
+<p>systemd-based Linux distributions are supported, but systemd is not required.
+No system-wide service install is required.</p>
+<h2 id="downloads"><a class="header" href="#downloads">Downloads</a></h2>
+<p>Release files are served from <code>https://obi.menhera.org/</code>.</p>
+<p>Server-capable tarballs:</p>
+<ul>
+<li><code>release-x86_64-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-aarch64-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-riscv64gc-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-powerpc64le-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-s390x-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-x86_64-apple-darwin.tar.gz</code></li>
+<li><code>release-aarch64-apple-darwin.tar.gz</code></li>
+<li><code>release-x86_64-unknown-freebsd.tar.gz</code></li>
+<li><code>release-x86_64-unknown-netbsd.tar.gz</code></li>
+<li><code>release-x86_64-unknown-illumos.tar.gz</code></li>
+</ul>
+<p>Client-only tarballs:</p>
+<ul>
+<li><code>release-x86_64-pc-windows-msvc.tar.gz</code></li>
+</ul>
+<p>Server-capable tarballs contain <code>ssh-obi</code> and <code>ssh-obi-server</code>. Windows
+client-only tarballs contain <code>ssh-obi.exe</code>.</p>
+<h2 id="out-of-scope"><a class="header" href="#out-of-scope">Out Of Scope</a></h2>
+<ul>
+<li>Android.</li>
+<li>Windows remote servers.</li>
+<li>Terminal pane/window management.</li>
+<li>UDP transport.</li>
+<li>Screen-state replication.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h1>
+<h2 id="ssh-obi-cannot-find-ssh"><a class="header" href="#ssh-obi-cannot-find-ssh"><code>ssh-obi</code> cannot find <code>ssh</code></a></h2>
+<p>Install OpenSSH client tools and make sure <code>ssh</code> is on PATH. <code>ssh-obi</code> uses the
+system <code>ssh</code> binary and does not include its own SSH implementation.</p>
+<h2 id="remote-install-reports-unsupported-target"><a class="header" href="#remote-install-reports-unsupported-target">Remote install reports unsupported target</a></h2>
+<p>The Unix bootstrap chooses a tarball from <code>uname -s</code> and <code>uname -m</code>. If it
+prints an unsupported target error, no release tarball is currently published
+for that OS/CPU pair.</p>
+<p>Use <a href="#platforms-and-downloads">Platform Support</a> to check the published target
+list.</p>
+<h2 id="windows-install-succeeds-but-ssh-obiexe-is-not-found"><a class="header" href="#windows-install-succeeds-but-ssh-obiexe-is-not-found">Windows install succeeds but <code>ssh-obi.exe</code> is not found</a></h2>
+<p>The Windows bootstrap updates the user’s PATH. Existing terminals may not see
+that change.</p>
+<p>Open a new terminal and try:</p>
+<pre><code class="language-powershell">ssh-obi.exe --help
+</code></pre>
+<h2 id="the-picker-shows-unknown-in-what"><a class="header" href="#the-picker-shows-unknown-in-what">The picker shows <code>(unknown)</code> in <code>WHAT</code></a></h2>
+<p>The <code>WHAT</code> column is best-effort. It depends on the remote OS and process table
+details. Failure to detect the foreground command does not affect session
+correctness.</p>
+<p><code>ssh-obi</code> deliberately avoids wrapping or instrumenting your shell to improve
+this field.</p>
+<h2 id="output-repeats-after-reconnect"><a class="header" href="#output-repeats-after-reconnect">Output repeats after reconnect</a></h2>
+<p>This is expected. Reattach replays the session’s current bounded buffer before
+live forwarding resumes. <code>ssh-obi</code> does not maintain a per-client replay
+cursor.</p>
+<h2 id="old-output-is-missing-after-reconnect"><a class="header" href="#old-output-is-missing-after-reconnect">Old output is missing after reconnect</a></h2>
+<p>The session replay buffer is bounded. Old output belongs in the local terminal
+scrollback.</p>
+<h2 id="a-session-is-busy"><a class="header" href="#a-session-is-busy">A session is busy</a></h2>
+<p>A session can have only one attached client. If another client is already
+attached, a second attach attempt gets <code>SessionBusy</code>.</p>
+<p>Use:</p>
+<pre><code class="language-sh">ssh-obi --list user@example.com
+</code></pre>
+<p>to inspect sessions, or:</p>
+<pre><code class="language-sh">ssh-obi --detach --session ID user@example.com
+</code></pre>
+<p>to ask the session to detach the attached client for a known session.</p>
+<h2 id="a-deliberate-detach-reconnects-unexpectedly"><a class="header" href="#a-deliberate-detach-reconnects-unexpectedly">A deliberate detach reconnects unexpectedly</a></h2>
+<p>Use the in-session helper:</p>
+<pre><code class="language-sh">ssh-obi-server --detach
+</code></pre>
+<p>This asks the remote session to detach and causes the client to exit gracefully.
+Simply closing the terminal, killing SSH, or losing the network is ambiguous,
+so the client reconnects.</p>
+<h2 id="powershell-bootstrap-cannot-run"><a class="header" href="#powershell-bootstrap-cannot-run">PowerShell bootstrap cannot run</a></h2>
+<p>Use a command that bypasses the current process policy:</p>
+<pre><code class="language-powershell">powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://obi.menhera.org/bootstrap.ps1 | iex"
+</code></pre>
+<p>If that is blocked by local policy, download the script and inspect it before
+running it in an allowed shell.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="developer-docs"><a class="header" href="#developer-docs">Developer Docs</a></h1>
+<p>This chapter is for contributors and release maintainers. The rest of this book
+is intentionally user-facing.</p>
+<h2 id="repository-commands"><a class="header" href="#repository-commands">Repository Commands</a></h2>
+<p>Build the client:</p>
+<pre><code class="language-sh">cargo build --release
+</code></pre>
+<p>Build both client and server:</p>
+<pre><code class="language-sh">cargo build --release --features server-bin --bins
+</code></pre>
+<p>Run tests:</p>
+<pre><code class="language-sh">cargo test --features server-bin
+</code></pre>
+<p>Run clippy:</p>
+<pre><code class="language-sh">cargo clippy --all-targets --features server-bin -- -D warnings
+</code></pre>
+<p>Format:</p>
+<pre><code class="language-sh">cargo fmt --all
+</code></pre>
+<h2 id="documentation-site"><a class="header" href="#documentation-site">Documentation Site</a></h2>
+<p>The site is generated from <code>docs-src/</code> with mdBook and published from <code>docs/</code>.</p>
+<p>Use:</p>
+<pre><code class="language-sh">./build-docs.sh
+</code></pre>
+<p>Do not run <code>mdbook build</code> directly for published updates. mdBook overwrites
+<code>docs/</code>, so <code>build-docs.sh</code> copies every non-mdBook artifact needed by GitHub
+Pages after each build:</p>
+<ul>
+<li><code>bootstrap.sh</code></li>
+<li><code>bootstrap.bat</code></li>
+<li><code>bootstrap.ps1</code></li>
+<li><code>.nojekyll</code></li>
+<li>release tarballs found in known release output locations</li>
+</ul>
+<h2 id="release-builds"><a class="header" href="#release-builds">Release Builds</a></h2>
+<p>Use:</p>
+<pre><code class="language-sh">./build-release.sh
+</code></pre>
+<p>Default build routing:</p>
+<ul>
+<li><code>cross-rs</code>: x86_64/aarch64 Linux musl, FreeBSD, illumos, NetBSD.</li>
+<li><code>cargo-zigbuild</code> plus <code>zig</code>: Darwin, riscv64 Linux musl, powerpc64le Linux
+musl.</li>
+<li><code>cargo +nightly zigbuild -Z build-std=std,panic_abort</code>: s390x Linux musl.</li>
+<li><code>cargo-xwin</code>: Windows x86_64 MSVC client.</li>
+</ul>
+<p>Each target gets its own Cargo target directory under <code>target/release-build/</code>.
+This prevents host-side Cargo build-script executables from being reused across
+build environments with different libc baselines.</p>
+<p>NetBSD uses a tiny target-only <code>libexecinfo</code> fallback because the cross-rs
+NetBSD image currently lacks that target library.</p>
+<p>Windows uses the MSVC target because it produces a smaller and more compatible
+client binary than the GNU target in this release flow.</p>
+<p>Useful environment variables:</p>
+<ul>
+<li><code>CROSS</code>: cross-rs command, default <code>cross</code>.</li>
+<li><code>CARGO_ZIGBUILD</code>: cargo-zigbuild command, default <code>cargo-zigbuild</code>.</li>
+<li><code>CARGO_XWIN</code>: cargo-xwin command, default <code>cargo-xwin</code>.</li>
+<li><code>OUT_DIR</code>: output directory for tarballs, default current directory.</li>
+<li><code>RELEASE_TARGET_ROOT</code>: Cargo target root, default <code>target/release-build</code>.</li>
+<li><code>CROSS_SERVER_TARGETS</code>: override cross-rs server target list.</li>
+<li><code>ZIGBUILD_SERVER_TARGETS</code>: override zigbuild server target list.</li>
+<li><code>CLIENT_ONLY_TARGETS</code>: override client-only target list.</li>
+<li><code>ZIGBUILD_BUILD_STD_TOOLCHAIN</code>: nightly toolchain for build-std targets,
+default <code>nightly</code>.</li>
+<li><code>LLVM_LIB</code>: explicit <code>llvm-lib</code> path for MSVC C build steps.</li>
+</ul>
+<h2 id="high-level-architecture"><a class="header" href="#high-level-architecture">High-Level Architecture</a></h2>
+<p>There are three remote process roles:</p>
+<ul>
+<li>Daemon: long-lived process that owns one PTY and one shell.</li>
+<li>Broker: short-lived process started by SSH to connect the client to a daemon.</li>
+<li>Detach helper: short-lived process run inside the remote shell by
+<code>ssh-obi-server --detach</code>.</li>
+</ul>
+<p>The local client starts the system <code>ssh</code> binary, sends the bootstrap as the
+remote command, waits for <code>OBI-SERVER-READY</code>, negotiates capabilities, selects
+or creates a session, and then forwards terminal bytes.</p>
+<p>The daemon must keep reading from the PTY while detached. Stopping reads can
+fill the kernel PTY buffer and block remote commands that print output.</p>
+<h2 id="protocol-notes"><a class="header" href="#protocol-notes">Protocol Notes</a></h2>
+<p>Frames use:</p>
+<pre><code class="language-text">msg_type: u8
+flags:    u8
+length:   u32, big endian
+payload:  length bytes of CBOR
+</code></pre>
+<p>Maximum payload length is 1 MiB. Unknown message types within the size limit
+are skipped silently.</p>
+<p>Feature negotiation is capability-based. Existing capability message formats
+are frozen once released; breaking changes require new capability names.</p>
+<p>Current capability names include:</p>
+<ul>
+<li><code>pty.v1</code></li>
+<li><code>replay.v1</code></li>
+<li><code>detach.v1</code></li>
+<li><code>session-list.v1</code></li>
+<li><code>exit-code.v1</code></li>
+</ul>
 
                     </main>
 

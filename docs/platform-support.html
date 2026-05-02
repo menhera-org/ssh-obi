@@ -3,8 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Page not found - ssh-obi documentation</title>
-        <base href="/">
+        <title>Platforms and Downloads - ssh-obi documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -175,14 +174,69 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="document-not-found-404"><a class="header" href="#document-not-found-404">Document not found (404)</a></h1>
-<p>This URL is invalid, sorry. Please use the navigation bar or search to continue.</p>
+                        <h1 id="platforms-and-downloads"><a class="header" href="#platforms-and-downloads">Platforms and Downloads</a></h1>
+<h2 id="local-client-platforms"><a class="header" href="#local-client-platforms">Local Client Platforms</a></h2>
+<p>Supported local client platforms:</p>
+<ul>
+<li>Linux</li>
+<li>macOS</li>
+<li>FreeBSD, NetBSD, and illumos where release artifacts are published</li>
+<li>Windows x86_64</li>
+</ul>
+<p>The client requires a working system <code>ssh</code> binary.</p>
+<h2 id="remote-server-platforms"><a class="header" href="#remote-server-platforms">Remote Server Platforms</a></h2>
+<p>Supported remote server platforms:</p>
+<ul>
+<li>Linux</li>
+<li>macOS</li>
+<li>FreeBSD</li>
+<li>NetBSD</li>
+<li>illumos</li>
+</ul>
+<p>The server component is not supported on Windows.</p>
+<p>systemd-based Linux distributions are supported, but systemd is not required.
+No system-wide service install is required.</p>
+<h2 id="downloads"><a class="header" href="#downloads">Downloads</a></h2>
+<p>Release files are served from <code>https://obi.menhera.org/</code>.</p>
+<p>Server-capable tarballs:</p>
+<ul>
+<li><code>release-x86_64-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-aarch64-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-riscv64gc-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-powerpc64le-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-s390x-unknown-linux-musl.tar.gz</code></li>
+<li><code>release-x86_64-apple-darwin.tar.gz</code></li>
+<li><code>release-aarch64-apple-darwin.tar.gz</code></li>
+<li><code>release-x86_64-unknown-freebsd.tar.gz</code></li>
+<li><code>release-x86_64-unknown-netbsd.tar.gz</code></li>
+<li><code>release-x86_64-unknown-illumos.tar.gz</code></li>
+</ul>
+<p>Client-only tarballs:</p>
+<ul>
+<li><code>release-x86_64-pc-windows-msvc.tar.gz</code></li>
+</ul>
+<p>Server-capable tarballs contain <code>ssh-obi</code> and <code>ssh-obi-server</code>. Windows
+client-only tarballs contain <code>ssh-obi.exe</code>.</p>
+<h2 id="out-of-scope"><a class="header" href="#out-of-scope">Out Of Scope</a></h2>
+<ul>
+<li>Android.</li>
+<li>Windows remote servers.</li>
+<li>Terminal pane/window management.</li>
+<li>UDP transport.</li>
+<li>Screen-state replication.</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="session-model.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
+                            <a rel="next prefetch" href="troubleshooting.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -190,7 +244,13 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="session-model.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
+                    <a rel="next prefetch" href="troubleshooting.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>

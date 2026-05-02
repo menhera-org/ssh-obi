@@ -3,8 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Page not found - ssh-obi documentation</title>
-        <base href="/">
+        <title>Developer Docs - ssh-obi documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -175,13 +174,113 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="document-not-found-404"><a class="header" href="#document-not-found-404">Document not found (404)</a></h1>
-<p>This URL is invalid, sorry. Please use the navigation bar or search to continue.</p>
+                        <h1 id="developer-docs"><a class="header" href="#developer-docs">Developer Docs</a></h1>
+<p>This chapter is for contributors and release maintainers. The rest of this book
+is intentionally user-facing.</p>
+<h2 id="repository-commands"><a class="header" href="#repository-commands">Repository Commands</a></h2>
+<p>Build the client:</p>
+<pre><code class="language-sh">cargo build --release
+</code></pre>
+<p>Build both client and server:</p>
+<pre><code class="language-sh">cargo build --release --features server-bin --bins
+</code></pre>
+<p>Run tests:</p>
+<pre><code class="language-sh">cargo test --features server-bin
+</code></pre>
+<p>Run clippy:</p>
+<pre><code class="language-sh">cargo clippy --all-targets --features server-bin -- -D warnings
+</code></pre>
+<p>Format:</p>
+<pre><code class="language-sh">cargo fmt --all
+</code></pre>
+<h2 id="documentation-site"><a class="header" href="#documentation-site">Documentation Site</a></h2>
+<p>The site is generated from <code>docs-src/</code> with mdBook and published from <code>docs/</code>.</p>
+<p>Use:</p>
+<pre><code class="language-sh">./build-docs.sh
+</code></pre>
+<p>Do not run <code>mdbook build</code> directly for published updates. mdBook overwrites
+<code>docs/</code>, so <code>build-docs.sh</code> copies every non-mdBook artifact needed by GitHub
+Pages after each build:</p>
+<ul>
+<li><code>bootstrap.sh</code></li>
+<li><code>bootstrap.bat</code></li>
+<li><code>bootstrap.ps1</code></li>
+<li><code>.nojekyll</code></li>
+<li>release tarballs found in known release output locations</li>
+</ul>
+<h2 id="release-builds"><a class="header" href="#release-builds">Release Builds</a></h2>
+<p>Use:</p>
+<pre><code class="language-sh">./build-release.sh
+</code></pre>
+<p>Default build routing:</p>
+<ul>
+<li><code>cross-rs</code>: x86_64/aarch64 Linux musl, FreeBSD, illumos, NetBSD.</li>
+<li><code>cargo-zigbuild</code> plus <code>zig</code>: Darwin, riscv64 Linux musl, powerpc64le Linux
+musl.</li>
+<li><code>cargo +nightly zigbuild -Z build-std=std,panic_abort</code>: s390x Linux musl.</li>
+<li><code>cargo-xwin</code>: Windows x86_64 MSVC client.</li>
+</ul>
+<p>Each target gets its own Cargo target directory under <code>target/release-build/</code>.
+This prevents host-side Cargo build-script executables from being reused across
+build environments with different libc baselines.</p>
+<p>NetBSD uses a tiny target-only <code>libexecinfo</code> fallback because the cross-rs
+NetBSD image currently lacks that target library.</p>
+<p>Windows uses the MSVC target because it produces a smaller and more compatible
+client binary than the GNU target in this release flow.</p>
+<p>Useful environment variables:</p>
+<ul>
+<li><code>CROSS</code>: cross-rs command, default <code>cross</code>.</li>
+<li><code>CARGO_ZIGBUILD</code>: cargo-zigbuild command, default <code>cargo-zigbuild</code>.</li>
+<li><code>CARGO_XWIN</code>: cargo-xwin command, default <code>cargo-xwin</code>.</li>
+<li><code>OUT_DIR</code>: output directory for tarballs, default current directory.</li>
+<li><code>RELEASE_TARGET_ROOT</code>: Cargo target root, default <code>target/release-build</code>.</li>
+<li><code>CROSS_SERVER_TARGETS</code>: override cross-rs server target list.</li>
+<li><code>ZIGBUILD_SERVER_TARGETS</code>: override zigbuild server target list.</li>
+<li><code>CLIENT_ONLY_TARGETS</code>: override client-only target list.</li>
+<li><code>ZIGBUILD_BUILD_STD_TOOLCHAIN</code>: nightly toolchain for build-std targets,
+default <code>nightly</code>.</li>
+<li><code>LLVM_LIB</code>: explicit <code>llvm-lib</code> path for MSVC C build steps.</li>
+</ul>
+<h2 id="high-level-architecture"><a class="header" href="#high-level-architecture">High-Level Architecture</a></h2>
+<p>There are three remote process roles:</p>
+<ul>
+<li>Daemon: long-lived process that owns one PTY and one shell.</li>
+<li>Broker: short-lived process started by SSH to connect the client to a daemon.</li>
+<li>Detach helper: short-lived process run inside the remote shell by
+<code>ssh-obi-server --detach</code>.</li>
+</ul>
+<p>The local client starts the system <code>ssh</code> binary, sends the bootstrap as the
+remote command, waits for <code>OBI-SERVER-READY</code>, negotiates capabilities, selects
+or creates a session, and then forwards terminal bytes.</p>
+<p>The daemon must keep reading from the PTY while detached. Stopping reads can
+fill the kernel PTY buffer and block remote commands that print output.</p>
+<h2 id="protocol-notes"><a class="header" href="#protocol-notes">Protocol Notes</a></h2>
+<p>Frames use:</p>
+<pre><code class="language-text">msg_type: u8
+flags:    u8
+length:   u32, big endian
+payload:  length bytes of CBOR
+</code></pre>
+<p>Maximum payload length is 1 MiB. Unknown message types within the size limit
+are skipped silently.</p>
+<p>Feature negotiation is capability-based. Existing capability message formats
+are frozen once released; breaking changes require new capability names.</p>
+<p>Current capability names include:</p>
+<ul>
+<li><code>pty.v1</code></li>
+<li><code>replay.v1</code></li>
+<li><code>detach.v1</code></li>
+<li><code>session-list.v1</code></li>
+<li><code>exit-code.v1</code></li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="troubleshooting.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
 
                         <div style="clear: both"></div>
@@ -190,6 +289,9 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="troubleshooting.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
             </nav>
 

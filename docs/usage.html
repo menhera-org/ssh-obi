@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Example topic - ssh-obi documentation</title>
+        <title>Connecting - ssh-obi documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4b2ea111.js";
+            window.path_to_searchindex_js = "searchindex-fa2ee870.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-4f749792.js"></script>
+        <script src="toc-6266f562.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -174,16 +174,79 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="example-topic"><a class="header" href="#example-topic">Example topic</a></h1>
+                        <h1 id="connecting"><a class="header" href="#connecting">Connecting</a></h1>
+<h2 id="basic-commands"><a class="header" href="#basic-commands">Basic Commands</a></h2>
+<p>Attach to an existing free session or create one if none exists:</p>
+<pre><code class="language-sh">ssh-obi user@example.com
+</code></pre>
+<p>Always create a new session:</p>
+<pre><code class="language-sh">ssh-obi --new user@example.com
+</code></pre>
+<p>Attach to a specific session:</p>
+<pre><code class="language-sh">ssh-obi --session abc123 user@example.com
+</code></pre>
+<p>List sessions and exit:</p>
+<pre><code class="language-sh">ssh-obi --list user@example.com
+</code></pre>
+<p>Detach the attached client for a specific session and exit:</p>
+<pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
+</code></pre>
+<p>Detach from inside the remote shell:</p>
+<pre><code class="language-sh">ssh-obi-server --detach
+</code></pre>
+<h2 id="using-ssh-options"><a class="header" href="#using-ssh-options">Using SSH Options</a></h2>
+<p><code>ssh-obi</code> invokes the system <code>ssh</code> binary and forwards common OpenSSH options
+before the destination.</p>
+<p>Examples:</p>
+<pre><code class="language-sh">ssh-obi -p 2222 user@example.com
+ssh-obi -i ~/.ssh/work_ed25519 user@example.com
+ssh-obi -J bastion.example.com user@app.example.com
+ssh-obi -F ~/.ssh/config work-host
+ssh-obi -o StrictHostKeyChecking=accept-new user@example.com
+ssh-obi -vv user@example.com
+</code></pre>
+<p>Common passthrough options include:</p>
+<ul>
+<li>Standalone flags such as <code>-4</code>, <code>-6</code>, <code>-A</code>, <code>-a</code>, <code>-C</code>, <code>-q</code>, <code>-T</code>, <code>-t</code>,
+<code>-X</code>, <code>-x</code>, <code>-Y</code>, and <code>-v</code>/<code>-vv</code>/<code>-vvv</code>.</li>
+<li>Options with values such as <code>-p</code>, <code>-i</code>, <code>-J</code>, <code>-F</code>, <code>-o</code>, <code>-l</code>, <code>-L</code>, <code>-R</code>,
+<code>-D</code>, and <code>-W</code>.</li>
+</ul>
+<p><code>ssh-obi</code> manages the remote command itself. Remote command arguments are not
+supported:</p>
+<pre><code class="language-sh">ssh-obi user@example.com uptime
+</code></pre>
+<p>Use plain <code>ssh</code> for one-shot remote commands.</p>
+<h2 id="picking-a-session"><a class="header" href="#picking-a-session">Picking A Session</a></h2>
+<p>Free sessions are selectable. Busy sessions may be displayed for awareness but
+are not assigned picker numbers.</p>
+<p>Columns:</p>
+<ul>
+<li><code>INIT</code>: when the session was created.</li>
+<li><code>DETACH</code>: when a client last detached, or <code>-</code> if it has never detached.</li>
+<li><code>WHAT</code>: best-effort foreground command detected for the session.</li>
+</ul>
+<p>The <code>WHAT</code> column is only a hint.</p>
+<h2 id="when-the-remote-shell-exits"><a class="header" href="#when-the-remote-shell-exits">When The Remote Shell Exits</a></h2>
+<p>If the remote shell exits while attached, the local client mirrors the exit
+status where possible.</p>
+<p>If the connection is lost before the client receives a shell-exit report, the
+client reconnects first. If the session is gone or no exit status can be
+recovered, the client reports failure rather than guessing success.</p>
+<p>A deliberate detach through <code>ssh-obi-server --detach</code> is graceful. The client
+exits with status 0 and does not reconnect.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="installation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
+                            <a rel="next prefetch" href="session-model.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -191,10 +254,13 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="installation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
+                    <a rel="next prefetch" href="session-model.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>

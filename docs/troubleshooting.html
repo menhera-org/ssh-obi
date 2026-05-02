@@ -3,8 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Page not found - ssh-obi documentation</title>
-        <base href="/">
+        <title>Troubleshooting - ssh-obi documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -175,14 +174,70 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="document-not-found-404"><a class="header" href="#document-not-found-404">Document not found (404)</a></h1>
-<p>This URL is invalid, sorry. Please use the navigation bar or search to continue.</p>
+                        <h1 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h1>
+<h2 id="ssh-obi-cannot-find-ssh"><a class="header" href="#ssh-obi-cannot-find-ssh"><code>ssh-obi</code> cannot find <code>ssh</code></a></h2>
+<p>Install OpenSSH client tools and make sure <code>ssh</code> is on PATH. <code>ssh-obi</code> uses the
+system <code>ssh</code> binary and does not include its own SSH implementation.</p>
+<h2 id="remote-install-reports-unsupported-target"><a class="header" href="#remote-install-reports-unsupported-target">Remote install reports unsupported target</a></h2>
+<p>The Unix bootstrap chooses a tarball from <code>uname -s</code> and <code>uname -m</code>. If it
+prints an unsupported target error, no release tarball is currently published
+for that OS/CPU pair.</p>
+<p>Use <a href="./platform-support.html">Platform Support</a> to check the published target
+list.</p>
+<h2 id="windows-install-succeeds-but-ssh-obiexe-is-not-found"><a class="header" href="#windows-install-succeeds-but-ssh-obiexe-is-not-found">Windows install succeeds but <code>ssh-obi.exe</code> is not found</a></h2>
+<p>The Windows bootstrap updates the user’s PATH. Existing terminals may not see
+that change.</p>
+<p>Open a new terminal and try:</p>
+<pre><code class="language-powershell">ssh-obi.exe --help
+</code></pre>
+<h2 id="the-picker-shows-unknown-in-what"><a class="header" href="#the-picker-shows-unknown-in-what">The picker shows <code>(unknown)</code> in <code>WHAT</code></a></h2>
+<p>The <code>WHAT</code> column is best-effort. It depends on the remote OS and process table
+details. Failure to detect the foreground command does not affect session
+correctness.</p>
+<p><code>ssh-obi</code> deliberately avoids wrapping or instrumenting your shell to improve
+this field.</p>
+<h2 id="output-repeats-after-reconnect"><a class="header" href="#output-repeats-after-reconnect">Output repeats after reconnect</a></h2>
+<p>This is expected. Reattach replays the session’s current bounded buffer before
+live forwarding resumes. <code>ssh-obi</code> does not maintain a per-client replay
+cursor.</p>
+<h2 id="old-output-is-missing-after-reconnect"><a class="header" href="#old-output-is-missing-after-reconnect">Old output is missing after reconnect</a></h2>
+<p>The session replay buffer is bounded. Old output belongs in the local terminal
+scrollback.</p>
+<h2 id="a-session-is-busy"><a class="header" href="#a-session-is-busy">A session is busy</a></h2>
+<p>A session can have only one attached client. If another client is already
+attached, a second attach attempt gets <code>SessionBusy</code>.</p>
+<p>Use:</p>
+<pre><code class="language-sh">ssh-obi --list user@example.com
+</code></pre>
+<p>to inspect sessions, or:</p>
+<pre><code class="language-sh">ssh-obi --detach --session ID user@example.com
+</code></pre>
+<p>to ask the session to detach the attached client for a known session.</p>
+<h2 id="a-deliberate-detach-reconnects-unexpectedly"><a class="header" href="#a-deliberate-detach-reconnects-unexpectedly">A deliberate detach reconnects unexpectedly</a></h2>
+<p>Use the in-session helper:</p>
+<pre><code class="language-sh">ssh-obi-server --detach
+</code></pre>
+<p>This asks the remote session to detach and causes the client to exit gracefully.
+Simply closing the terminal, killing SSH, or losing the network is ambiguous,
+so the client reconnects.</p>
+<h2 id="powershell-bootstrap-cannot-run"><a class="header" href="#powershell-bootstrap-cannot-run">PowerShell bootstrap cannot run</a></h2>
+<p>Use a command that bypasses the current process policy:</p>
+<pre><code class="language-powershell">powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://obi.menhera.org/bootstrap.ps1 | iex"
+</code></pre>
+<p>If that is blocked by local policy, download the script and inspect it before
+running it in an allowed shell.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="platform-support.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
+                            <a rel="next prefetch" href="developer-docs.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -190,7 +245,13 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="platform-support.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
+                    <a rel="next prefetch" href="developer-docs.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>

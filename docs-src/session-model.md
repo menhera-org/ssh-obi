@@ -1,0 +1,68 @@
+# Sessions
+
+An `ssh-obi` session is one long-lived remote shell. The session can outlive
+many SSH connections.
+
+## Creating Sessions
+
+Use `ssh-obi user@host` to attach to a free session or create one when none is
+available.
+
+Use `ssh-obi --new user@host` to always create a new session.
+
+Use `ssh-obi --session ID user@host` to attach to a specific session.
+
+## Busy Sessions
+
+A session can have only one attached client. If another client is already
+attached, the session is busy.
+
+Busy sessions are still visible in `--list`. You can also ask a known busy
+session to detach its current client:
+
+```sh
+ssh-obi --detach --session ID user@host
+```
+
+## Detach
+
+Detach means "drop the client, keep the shell".
+
+When the network drops, the remote shell keeps running and waits for another
+client.
+
+When the user runs:
+
+```sh
+ssh-obi-server --detach
+```
+
+the local client exits cleanly and does not reconnect.
+
+The shell is not sent SIGHUP.
+
+## Output While Detached
+
+Remote output continues to be collected while detached.
+
+This prevents commands that print output from getting stuck just because no
+client is attached.
+
+Detached output is kept in a bounded replay buffer. When the buffer fills, old
+bytes are evicted.
+
+## Reconnect And Replay
+
+After the first attach, the client knows the session id. On an ambiguous
+disconnect, it starts a fresh SSH connection and requests that same session.
+
+The session sends recent output, then resumes live forwarding. This can
+duplicate bytes the local terminal already displayed before the disconnect.
+That is acceptable and expected.
+
+Anything older than the replay buffer belongs in the local terminal scrollback.
+
+## Shell Exit
+
+When the shell exits, the session ends. A later `ssh-obi user@host` invocation
+will not list that session.

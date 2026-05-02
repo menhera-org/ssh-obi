@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4b2ea111.js";
+            window.path_to_searchindex_js = "searchindex-fa2ee870.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-4f749792.js"></script>
+        <script src="toc-6266f562.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -174,14 +174,68 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="overview"><a class="header" href="#overview">Overview</a></h1>
+                        <h1 id="ssh-obi"><a class="header" href="#ssh-obi">ssh-obi</a></h1>
+<p><code>ssh-obi</code> keeps SSH shells alive when the connection drops, when a laptop
+sleeps, or when the client moves between networks.</p>
+<p>It is designed to feel like plain SSH:</p>
+<ul>
+<li>Use the same destination names, keys, jump hosts, and SSH config you already
+use.</li>
+<li>Keep using your local terminal scrollback, search, selection, and copy/paste.</li>
+<li>Reconnect to the same remote shell after a network break.</li>
+<li>Keep several independent sessions on the same remote account.</li>
+<li>Install per user, without a root service or a custom network port.</li>
+</ul>
+<p><code>ssh-obi</code> is intentionally not a terminal window manager. It does not implement
+panes, tabs, or in-band escape commands. If you want window management, run
+<code>tmux</code> or another multiplexer inside the remote shell.</p>
+<h2 id="status"><a class="header" href="#status">Status</a></h2>
+<p><code>ssh-obi</code> is in early development. Commands and release details may still
+change before the first <code>0.1.0</code> release is finalized.</p>
+<p>The documentation on this site is the user-facing source for the published
+bootstrap scripts and release tarballs at <code>https://obi.menhera.org/</code>.</p>
+<h2 id="quick-examples"><a class="header" href="#quick-examples">Quick Examples</a></h2>
+<p>Connect to a host:</p>
+<pre><code class="language-sh">ssh-obi user@example.com
+</code></pre>
+<p>Create a new session even if free sessions already exist:</p>
+<pre><code class="language-sh">ssh-obi --new user@example.com
+</code></pre>
+<p>List existing sessions without attaching:</p>
+<pre><code class="language-sh">ssh-obi --list user@example.com
+</code></pre>
+<p>Detach the currently attached client for a known session from your local
+machine:</p>
+<pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
+</code></pre>
+<p>Or detach from inside the remote shell without killing it:</p>
+<pre><code class="language-sh">ssh-obi-server --detach
+</code></pre>
+<h2 id="what-to-expect"><a class="header" href="#what-to-expect">What To Expect</a></h2>
+<ul>
+<li>A network disconnect does not kill the remote shell.</li>
+<li>Remote output continues to be collected while you are detached.</li>
+<li>Recent output is replayed on reconnect.</li>
+<li>Some recently displayed output may appear twice after reconnect.</li>
+<li>Windows is a client-only platform. Remote servers are Unix-like systems.</li>
+</ul>
+<h2 id="what-to-read-next"><a class="header" href="#what-to-read-next">What To Read Next</a></h2>
+<ul>
+<li><a href="./getting-started.html">Getting Started</a> for the shortest usable flow.</li>
+<li><a href="./installation.html">Installation</a> for Unix and Windows bootstrap commands.</li>
+<li><a href="./usage.html">Connecting</a> for commands and session selection.</li>
+<li><a href="./session-model.html">Sessions</a> for detach, reconnect, replay, and exit
+behavior.</li>
+<li><a href="./platform-support.html">Platforms and Downloads</a> for supported systems and
+published tarball names.</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
 
-                            <a rel="next prefetch" href="01-example-topic.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="getting-started.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -192,7 +246,7 @@
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
 
-                    <a rel="next prefetch" href="01-example-topic.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="getting-started.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
