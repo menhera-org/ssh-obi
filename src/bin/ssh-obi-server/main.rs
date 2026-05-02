@@ -2,6 +2,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use ssh_obi::protocol::supports_protocol_baseline;
+use ssh_obi::server::detach_from_env;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -33,8 +34,11 @@ fn main() -> ExitCode {
     }
 
     if args.detach {
-        eprintln!("ssh-obi-server: detach mode is not implemented yet");
-        return ExitCode::from(70);
+        if let Err(err) = detach_from_env() {
+            eprintln!("ssh-obi-server: detach failed: {err}");
+            return ExitCode::from(1);
+        }
+        return ExitCode::SUCCESS;
     }
 
     eprintln!("ssh-obi-server: broker mode is not implemented yet");

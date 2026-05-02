@@ -1,9 +1,27 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serializer};
+
 pub const HEADER_LEN: usize = 6;
 pub const MAX_PAYLOAD_LEN: usize = 1024 * 1024;
 pub const CURRENT_PROTOCOL_BASELINE: &str = "0.1";
+
+pub const CAP_PTY_V1: &str = "pty.v1";
+pub const CAP_REPLAY_V1: &str = "replay.v1";
+pub const CAP_DETACH_V1: &str = "detach.v1";
+pub const CAP_SESSION_LIST_V1: &str = "session-list.v1";
+pub const CAP_EXIT_CODE_V1: &str = "exit-code.v1";
+
+pub const DEFAULT_CAPABILITIES: &[&str] = &[
+    CAP_PTY_V1,
+    CAP_REPLAY_V1,
+    CAP_DETACH_V1,
+    CAP_SESSION_LIST_V1,
+    CAP_EXIT_CODE_V1,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MessageType(u8);
@@ -94,6 +112,24 @@ impl Frame {
         self.payload
     }
 
+    pub fn from_body<T>(msg_type: MessageType, flags: u8, body: &T) -> Result<Self, ProtocolError>
+    where
+        T: Serialize,
+    {
+        let mut payload = Vec::new();
+        ciborium::into_writer(body, &mut payload)
+            .map_err(|_| ProtocolError::InvalidMessage("failed to encode CBOR body"))?;
+        Self::new(msg_type, flags, payload)
+    }
+
+    pub fn decode_body<T>(&self) -> Result<T, ProtocolError>
+    where
+        T: DeserializeOwned,
+    {
+        ciborium::from_reader(self.payload.as_slice())
+            .map_err(|_| ProtocolError::InvalidMessage("malformed CBOR body"))
+    }
+
     pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), ProtocolError> {
         let len =
             u32::try_from(self.payload.len()).map_err(|_| ProtocolError::PayloadTooLarge {
@@ -156,6 +192,109 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<Option<Frame>, ProtocolErro
 
 pub fn supports_protocol_baseline(baseline: &str) -> bool {
     matches!(baseline, "0.1" | "0.1.0")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub capabilities: Vec<String>,
+}
+
+impl Capabilities {
+    pub fn default_supported() -> Self {
+        Self {
+            capabilities: DEFAULT_CAPABILITIES
+                .iter()
+                .map(|capability| capability.to_string())
+                .collect(),
+        }
+    }
+
+    pub fn intersection(&self, peer: &Self) -> Vec<String> {
+        self.capabilities
+            .iter()
+            .filter(|capability| peer.capabilities.contains(capability))
+            .cloned()
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct UnixTimeMillis(pub u64);
+
+impl Serialize for UnixTimeMillis {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for UnixTimeMillis {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self(u64::deserialize(deserializer)?))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionListRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionList {
+    pub sessions: Vec<SessionRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRecord {
+    pub session_id: String,
+    pub init_time: UnixTimeMillis,
+    pub last_detach_time: Option<UnixTimeMillis>,
+    pub current_command: String,
+    pub attached: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewSessionRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachSessionRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerAttachRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonInfoRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonInfo {
+    pub session: SessionRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowSize {
+    pub rows: u16,
+    pub cols: u16,
+    pub pixel_width: u16,
+    pub pixel_height: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExitStatus {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorMessage {
+    pub message: String,
 }
 
 #[derive(Debug)]
@@ -234,5 +373,39 @@ mod tests {
 
         let err = read_frame(&mut Cursor::new(bytes)).unwrap_err();
         assert!(matches!(err, ProtocolError::PayloadTooLarge { .. }));
+    }
+
+    #[test]
+    fn cbor_body_round_trips() {
+        let body = Capabilities::default_supported();
+        let frame = Frame::from_body(MessageType::CAPABILITIES, 0, &body).unwrap();
+        let decoded: Capabilities = frame.decode_body().unwrap();
+        assert_eq!(decoded, body);
+    }
+
+    #[test]
+    fn malformed_cbor_is_rejected() {
+        let frame = Frame::new(MessageType::CAPABILITIES, 0, vec![0xff]).unwrap();
+        let err = frame.decode_body::<Capabilities>().unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidMessage(_)));
+    }
+
+    #[test]
+    fn capability_intersection_preserves_local_order() {
+        let local = Capabilities {
+            capabilities: vec![
+                CAP_PTY_V1.to_string(),
+                CAP_REPLAY_V1.to_string(),
+                CAP_EXIT_CODE_V1.to_string(),
+            ],
+        };
+        let peer = Capabilities {
+            capabilities: vec![CAP_EXIT_CODE_V1.to_string(), CAP_PTY_V1.to_string()],
+        };
+
+        assert_eq!(
+            local.intersection(&peer),
+            vec![CAP_PTY_V1.to_string(), CAP_EXIT_CODE_V1.to_string()]
+        );
     }
 }

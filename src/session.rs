@@ -1,7 +1,10 @@
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use chrono::{DateTime, Local};
+
+pub const SOCKET_PATH_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionId(String);
@@ -59,6 +62,59 @@ impl fmt::Display for SessionIdError {
 }
 
 impl std::error::Error for SessionIdError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SocketPathError {
+    InvalidSessionId(SessionIdError),
+    TooLong { len: usize, max: usize },
+}
+
+impl fmt::Display for SocketPathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSessionId(err) => write!(f, "{err}"),
+            Self::TooLong { len, max } => {
+                write!(f, "socket path is too long: {len} bytes exceeds {max}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SocketPathError {}
+
+impl From<SessionIdError> for SocketPathError {
+    fn from(value: SessionIdError) -> Self {
+        Self::InvalidSessionId(value)
+    }
+}
+
+pub fn socket_dir_for_uid(uid: u32) -> PathBuf {
+    std::env::temp_dir().join(format!("ssh-obi-{uid}"))
+}
+
+pub fn socket_path_for_uid(uid: u32, session_id: &str) -> Result<PathBuf, SocketPathError> {
+    socket_path(socket_dir_for_uid(uid), session_id)
+}
+
+pub fn socket_path(
+    socket_dir: impl AsRef<Path>,
+    session_id: &str,
+) -> Result<PathBuf, SocketPathError> {
+    let session_id = SessionId::new(session_id)?;
+    let path = socket_dir
+        .as_ref()
+        .join(format!("{}.sock", session_id.as_str()));
+    let len = path.as_os_str().as_encoded_bytes().len();
+
+    if len > SOCKET_PATH_LIMIT {
+        return Err(SocketPathError::TooLong {
+            len,
+            max: SOCKET_PATH_LIMIT,
+        });
+    }
+
+    Ok(path)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionState {
@@ -202,5 +258,18 @@ mod tests {
         assert_eq!(rows[1].selector, Some(1));
         assert_eq!(rows[2].selector, Some(2));
         assert_eq!(rows[0].detach_time, "-");
+    }
+
+    #[test]
+    fn socket_path_uses_uid_namespace() {
+        let path = socket_path_for_uid(1234, "aaaaaaaa").unwrap();
+        assert!(path.ends_with("ssh-obi-1234/aaaaaaaa.sock"));
+    }
+
+    #[test]
+    fn socket_path_rejects_overlong_paths() {
+        let dir = "/tmp/".to_string() + &"x".repeat(SOCKET_PATH_LIMIT);
+        let err = socket_path(dir, "aaaaaaaa").unwrap_err();
+        assert!(matches!(err, SocketPathError::TooLong { .. }));
     }
 }
