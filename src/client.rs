@@ -10,6 +10,7 @@ use crate::cli::{ClientAction, ClientArgs};
 use crate::protocol::{
     AttachSessionRequest, DetachSessionRequest, ErrorMessage, ExitStatus, MessageType,
     NewSessionRequest, ProtocolError, PtyData, SessionBusy, SessionList, SessionListRequest,
+    WindowSize,
 };
 use crate::session::{
     AutoSelection, SessionIdError, SessionInfo, auto_select, render_session_table,
@@ -305,10 +306,18 @@ where
     W: Write,
 {
     let mut writer = FramedWriter::new(writer);
+    install_resize_handler();
+    let mut last_window_size = None;
+    send_window_size_if_changed(&mut writer, &mut last_window_size)?;
+
     let mut stdin = io::stdin().lock();
     let mut buf = [0u8; 8192];
 
     loop {
+        if resize_pending() {
+            send_window_size_if_changed(&mut writer, &mut last_window_size)?;
+        }
+
         match stdin.read(&mut buf) {
             Ok(0) => return Ok(()),
             Ok(n) => {
@@ -321,10 +330,113 @@ where
                 )?;
                 writer.flush()?;
             }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                send_window_size_if_changed(&mut writer, &mut last_window_size)?;
+            }
             Err(err) => return Err(ClientRunError::CopyStdin(err)),
         }
     }
+}
+
+fn send_window_size_if_changed<W>(
+    writer: &mut FramedWriter<W>,
+    last_window_size: &mut Option<WindowSize>,
+) -> Result<(), ClientRunError>
+where
+    W: Write,
+{
+    let Some(window_size) = current_window_size().map_err(ClientRunError::WindowSize)? else {
+        return Ok(());
+    };
+
+    if *last_window_size == Some(window_size.clone()) {
+        return Ok(());
+    }
+
+    writer.write_body(MessageType::WINDOW_SIZE, 0, &window_size)?;
+    writer.flush()?;
+    *last_window_size = Some(window_size);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn current_window_size() -> io::Result<Option<WindowSize>> {
+    use std::os::fd::AsRawFd;
+
+    let mut winsize = std::mem::MaybeUninit::<nix::libc::winsize>::uninit();
+    let result = unsafe {
+        nix::libc::ioctl(
+            io::stdin().as_raw_fd(),
+            nix::libc::TIOCGWINSZ,
+            winsize.as_mut_ptr(),
+        )
+    };
+
+    if result < 0 {
+        let err = io::Error::last_os_error();
+        if matches!(
+            err.raw_os_error(),
+            Some(code) if code == nix::libc::ENOTTY || code == nix::libc::EINVAL
+        ) {
+            return Ok(None);
+        }
+        return Err(err);
+    }
+
+    let winsize = unsafe { winsize.assume_init() };
+    if winsize.ws_row == 0 || winsize.ws_col == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(WindowSize {
+        rows: winsize.ws_row,
+        cols: winsize.ws_col,
+        pixel_width: winsize.ws_xpixel,
+        pixel_height: winsize.ws_ypixel,
+    }))
+}
+
+#[cfg(not(unix))]
+fn current_window_size() -> io::Result<Option<WindowSize>> {
+    Ok(None)
+}
+
+#[cfg(unix)]
+static RESIZE_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+#[cfg(unix)]
+static RESIZE_HANDLER_INSTALLED: std::sync::Once = std::sync::Once::new();
+
+#[cfg(unix)]
+extern "C" fn handle_sigwinch(_: nix::libc::c_int) {
+    RESIZE_PENDING.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(unix)]
+fn install_resize_handler() {
+    RESIZE_HANDLER_INSTALLED.call_once(|| {
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
+
+        let action = SigAction::new(
+            SigHandler::Handler(handle_sigwinch),
+            SaFlags::empty(),
+            SigSet::empty(),
+        );
+        let _ = unsafe { sigaction(Signal::SIGWINCH, &action) };
+    });
+}
+
+#[cfg(not(unix))]
+fn install_resize_handler() {}
+
+#[cfg(unix)]
+fn resize_pending() -> bool {
+    RESIZE_PENDING.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(not(unix))]
+fn resize_pending() -> bool {
+    false
 }
 
 fn exit_code_from_status(status: ExitStatus) -> Result<ExitCode, ClientRunError> {
@@ -433,6 +545,7 @@ pub enum ClientRunError {
     WaitSsh(io::Error),
     CopyStdin(io::Error),
     CopyStdout(io::Error),
+    WindowSize(io::Error),
     MissingExitStatus,
 }
 
@@ -467,6 +580,7 @@ impl fmt::Display for ClientRunError {
             Self::WaitSsh(err) => write!(f, "failed to wait for ssh: {err}"),
             Self::CopyStdin(err) => write!(f, "failed to copy stdin to session: {err}"),
             Self::CopyStdout(err) => write!(f, "failed to copy ssh stdout: {err}"),
+            Self::WindowSize(err) => write!(f, "failed to read terminal window size: {err}"),
             Self::MissingExitStatus => write!(f, "session ended without an exit status"),
         }
     }
@@ -481,7 +595,8 @@ impl std::error::Error for ClientRunError {
             | Self::Prompt(err)
             | Self::WaitSsh(err)
             | Self::CopyStdin(err)
-            | Self::CopyStdout(err) => Some(err),
+            | Self::CopyStdout(err)
+            | Self::WindowSize(err) => Some(err),
             Self::Protocol(err) => Some(err),
             Self::InvalidSession(err) => Some(err),
             _ => None,

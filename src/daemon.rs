@@ -103,7 +103,7 @@ mod runtime {
         BrokerAttachRequest, DaemonInfo, DaemonInfoRequest, DetachRequest, ExitStatus, MessageType,
         ProtocolError, PtyData, SessionBusy, SessionRecord, UnixTimeMillis, WindowSize,
     };
-    use crate::pty::{PtyError, spawn_pty_command};
+    use crate::pty::{PtyError, set_window_size, spawn_pty_command};
     use crate::server::{ENV_SESSION, ENV_SOCKET};
     use crate::session::{
         SessionId, SessionIdError, SocketPathError, prepare_socket_dir, remove_stale_socket,
@@ -332,7 +332,9 @@ mod runtime {
             }
 
             if frame.msg_type() == MessageType::WINDOW_SIZE {
-                let _: WindowSize = frame.decode_body()?;
+                let size: WindowSize = frame.decode_body()?;
+                let master = master_write.lock().expect("pty writer poisoned");
+                set_window_size(master.as_fd(), size).map_err(DaemonError::PtyWindowSize)?;
                 continue;
             }
 
@@ -472,6 +474,7 @@ mod runtime {
         StreamClone(io::Error),
         Pty(PtyError),
         DupPty(nix::errno::Errno),
+        PtyWindowSize(PtyError),
         PtyWrite(io::Error),
         Protocol(ProtocolError),
         NoRequest,
@@ -492,6 +495,7 @@ mod runtime {
                 Self::StreamClone(err) => write!(f, "failed to clone daemon socket stream: {err}"),
                 Self::Pty(err) => write!(f, "{err}"),
                 Self::DupPty(err) => write!(f, "failed to duplicate PTY master: {err}"),
+                Self::PtyWindowSize(err) => write!(f, "{err}"),
                 Self::PtyWrite(err) => write!(f, "failed to write to PTY: {err}"),
                 Self::Protocol(err) => write!(f, "daemon protocol error: {err}"),
                 Self::NoRequest => write!(f, "daemon connection closed before sending a request"),
@@ -512,7 +516,7 @@ mod runtime {
                 | Self::Accept(err)
                 | Self::StreamClone(err)
                 | Self::PtyWrite(err) => Some(err),
-                Self::Pty(err) => Some(err),
+                Self::Pty(err) | Self::PtyWindowSize(err) => Some(err),
                 Self::Protocol(err) => Some(err),
                 _ => None,
             }

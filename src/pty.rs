@@ -91,6 +91,27 @@ pub fn spawn_pty_command(
     }
 }
 
+#[cfg(all(unix, not(target_os = "aix")))]
+pub fn set_window_size<Fd>(fd: Fd, size: WindowSize) -> Result<(), PtyError>
+where
+    Fd: std::os::fd::AsFd,
+{
+    use std::os::fd::AsRawFd;
+
+    let winsize = to_libc_winsize(size);
+    let result = unsafe {
+        nix::libc::ioctl(
+            fd.as_fd().as_raw_fd(),
+            nix::libc::TIOCSWINSZ,
+            &winsize as *const nix::libc::winsize,
+        )
+    };
+
+    nix::errno::Errno::result(result)
+        .map(drop)
+        .map_err(PtyError::SetWindowSize)
+}
+
 #[cfg(not(all(unix, not(target_os = "aix"))))]
 pub fn open_pty(_size: Option<WindowSize>) -> Result<PtyPair, PtyError> {
     Err(PtyError::UnsupportedPlatform(
@@ -108,10 +129,21 @@ fn to_nix_winsize(size: WindowSize) -> nix::pty::Winsize {
     }
 }
 
+#[cfg(all(unix, not(target_os = "aix")))]
+fn to_libc_winsize(size: WindowSize) -> nix::libc::winsize {
+    nix::libc::winsize {
+        ws_row: size.rows,
+        ws_col: size.cols,
+        ws_xpixel: size.pixel_width,
+        ws_ypixel: size.pixel_height,
+    }
+}
+
 #[derive(Debug)]
 pub enum PtyError {
     Open(nix::errno::Errno),
     Fork(nix::errno::Errno),
+    SetWindowSize(nix::errno::Errno),
     NulByte(&'static str),
     InvalidEnvironmentName(String),
     UnsupportedPlatform(&'static str),
@@ -122,6 +154,7 @@ impl fmt::Display for PtyError {
         match self {
             Self::Open(err) => write!(f, "failed to open PTY: {err}"),
             Self::Fork(err) => write!(f, "failed to fork PTY child: {err}"),
+            Self::SetWindowSize(err) => write!(f, "failed to set PTY window size: {err}"),
             Self::NulByte(field) => write!(f, "PTY {field} contains a NUL byte"),
             Self::InvalidEnvironmentName(name) => {
                 write!(f, "environment variable name contains '=': {name}")
@@ -165,6 +198,40 @@ mod tests {
         .unwrap();
 
         drop(pair);
+    }
+
+    #[cfg(all(unix, not(target_os = "aix")))]
+    #[test]
+    fn set_window_size_applies_to_pty() {
+        use std::os::fd::{AsFd, AsRawFd};
+
+        let pair = open_pty(None).unwrap();
+        set_window_size(
+            pair.master.as_fd(),
+            WindowSize {
+                rows: 33,
+                cols: 101,
+                pixel_width: 640,
+                pixel_height: 480,
+            },
+        )
+        .unwrap();
+
+        let mut winsize = std::mem::MaybeUninit::<nix::libc::winsize>::uninit();
+        let result = unsafe {
+            nix::libc::ioctl(
+                pair.master.as_fd().as_raw_fd(),
+                nix::libc::TIOCGWINSZ,
+                winsize.as_mut_ptr(),
+            )
+        };
+        nix::errno::Errno::result(result).unwrap();
+        let winsize = unsafe { winsize.assume_init() };
+
+        assert_eq!(winsize.ws_row, 33);
+        assert_eq!(winsize.ws_col, 101);
+        assert_eq!(winsize.ws_xpixel, 640);
+        assert_eq!(winsize.ws_ypixel, 480);
     }
 
     #[cfg(all(unix, not(target_os = "aix")))]
