@@ -2,22 +2,32 @@ use std::env;
 use std::fmt;
 use std::io::{Read, Write};
 use std::path::Path;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+#[cfg(unix)]
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
+#[cfg(unix)]
 use crate::protocol::{
-    AttachSessionRequest, AttachedSession, BrokerAttachRequest, DaemonInfo, DaemonInfoRequest,
-    DetachRequest, DetachSessionRequest, ErrorMessage, MessageType, NewSessionRequest,
-    ProtocolError, SessionList, SessionListRequest,
+    AttachSessionRequest, AttachedSession, BrokerAttachRequest, DaemonInfoRequest, DetachRequest,
+    NewSessionRequest,
 };
+use crate::protocol::{
+    DaemonInfo, DetachSessionRequest, ErrorMessage, MessageType, ProtocolError, SessionList,
+    SessionListRequest,
+};
+use crate::session::{SessionIdError, SocketPathError, socket_dir_for_uid, socket_path_for_uid};
+#[cfg(unix)]
 use crate::session::{
-    SessionIdError, SocketPathError, generate_session_id, list_session_socket_ids,
-    remove_stale_socket, socket_dir_for_uid, socket_path, socket_path_for_uid,
+    generate_session_id, list_session_socket_ids, remove_stale_socket, socket_path,
 };
 use crate::transport::{FramedReader, FramedWriter};
 
 pub const ENV_SESSION: &str = "SSH_OBI_SESSION";
 pub const ENV_SOCKET: &str = "SSH_OBI_SOCKET";
+#[cfg(unix)]
 const DAEMON_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn detach_from_env() -> Result<(), ServerError> {
@@ -132,8 +142,14 @@ where
     }
 }
 
+#[cfg(unix)]
 fn current_uid() -> u32 {
     nix::unistd::Uid::current().as_raw()
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
 }
 
 #[cfg(unix)]

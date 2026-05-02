@@ -10,11 +10,30 @@ readme = "README.md"
 keywords = ["ssh", "terminal", "pty", "reconnect", "tmux"]
 categories = ["command-line-utilities", "network-programming"]
 description = "Lightweight per-user terminal multiplexer with auto-reconnecting sessions tunneled over plain SSH — preserves the local terminal's native scrollback (unlike mosh) and requires no system-wide daemon (unlike Eternal Terminal)."
+autobins = false
+
+[features]
+default = []
+server-bin = []
+
+[[bin]]
+name = "ssh-obi"
+path = "src/bin/ssh-obi/main.rs"
+
+[[bin]]
+name = "ssh-obi-server"
+path = "src/bin/ssh-obi-server/main.rs"
+required-features = ["server-bin"]
 
 [dependencies]
 ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 blake3 = "1"
-nix = { version = "0.31", features = ["term", "signal", "process", "fs", "user"] }
 serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["term", "signal", "process", "fs", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }

@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fs;
+#[cfg(unix)]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};

@@ -99,6 +99,7 @@ mod runtime {
     use nix::sys::wait::{WaitStatus, waitpid};
 
     use crate::daemon::ReplayBuffer;
+    use crate::foreground::foreground_command_for_pty;
     use crate::protocol::{
         BrokerAttachRequest, DaemonInfo, DaemonInfoRequest, DetachRequest, ExitStatus, MessageType,
         ProtocolError, PtyData, SessionBusy, SessionRecord, UnixTimeMillis, WindowSize,
@@ -284,10 +285,14 @@ mod runtime {
 
         if frame.msg_type() == MessageType::DAEMON_INFO_REQUEST {
             let _: DaemonInfoRequest = frame.decode_body()?;
+            let foreground = {
+                let master = master_write.lock().expect("pty writer poisoned");
+                foreground_command_for_pty(master.as_fd()).ok().flatten()
+            };
             let info = {
                 let state = state.lock().expect("daemon state poisoned");
                 DaemonInfo {
-                    session: state.record(),
+                    session: state.record(foreground),
                 }
             };
             let mut writer = FramedWriter::new(stream);
@@ -475,12 +480,12 @@ mod runtime {
             }
         }
 
-        fn record(&self) -> SessionRecord {
+        fn record(&self, current_command: Option<String>) -> SessionRecord {
             SessionRecord {
                 session_id: self.session_id.to_string(),
                 init_time: unix_time_millis(self.init_time),
                 last_detach_time: self.last_detach_time.map(unix_time_millis),
-                current_command: self.current_command.clone(),
+                current_command: current_command.unwrap_or_else(|| self.current_command.clone()),
                 attached: self.broker.is_some(),
             }
         }

@@ -10,7 +10,14 @@ where
     original: nix::sys::termios::Termios,
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct RawModeGuard {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    original: u32,
+}
+
+#[cfg(all(not(unix), not(windows)))]
 #[derive(Debug)]
 pub struct RawModeGuard;
 
@@ -52,7 +59,46 @@ where
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+impl RawModeGuard {
+    pub fn enable() -> Result<Option<Self>, TerminalError> {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::{
+            ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, GetConsoleMode,
+            GetStdHandle, STD_INPUT_HANDLE, SetConsoleMode,
+        };
+
+        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            return Ok(None);
+        }
+
+        let mut original = 0;
+        if unsafe { GetConsoleMode(handle, &mut original) } == 0 {
+            return Ok(None);
+        }
+
+        let raw = original & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+        if unsafe { SetConsoleMode(handle, raw) } == 0 {
+            return Err(TerminalError::SetConsoleMode(
+                std::io::Error::last_os_error(),
+            ));
+        }
+
+        Ok(Some(Self { handle, original }))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = unsafe {
+            windows_sys::Win32::System::Console::SetConsoleMode(self.handle, self.original)
+        };
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
 impl RawModeGuard {
     pub fn enable() -> Result<Option<Self>, TerminalError> {
         Ok(None)
@@ -65,6 +111,10 @@ pub enum TerminalError {
     GetAttr(nix::errno::Errno),
     #[cfg(unix)]
     SetAttr(nix::errno::Errno),
+    #[cfg(windows)]
+    SetConsoleMode(std::io::Error),
+    #[cfg(all(not(unix), not(windows)))]
+    UnsupportedPlatform,
 }
 
 impl fmt::Display for TerminalError {
@@ -74,6 +124,10 @@ impl fmt::Display for TerminalError {
             Self::GetAttr(err) => write!(f, "failed to read terminal attributes: {err}"),
             #[cfg(unix)]
             Self::SetAttr(err) => write!(f, "failed to set terminal attributes: {err}"),
+            #[cfg(windows)]
+            Self::SetConsoleMode(err) => write!(f, "failed to set console mode: {err}"),
+            #[cfg(all(not(unix), not(windows)))]
+            Self::UnsupportedPlatform => write!(f, "raw terminal mode is unsupported"),
         }
     }
 }

@@ -3,3 +3,4 @@
 ._*
 .env
 .codex
+/release-*.tar.gz

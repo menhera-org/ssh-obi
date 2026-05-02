@@ -454,6 +454,7 @@ dependencies = [
  "clap",
  "nix",
  "serde",
+ "windows-sys",
 ]
 
 [[package]]

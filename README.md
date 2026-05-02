@@ -104,6 +104,7 @@ ssh-obi/
     ├── lib.rs                      # re-exports the modules below as the `ssh_obi` library crate
     ├── protocol.rs                 # wire protocol: framing, capability handshake, control messages
     ├── session.rs                  # session id, listing, picker logic, on-remote enumeration
+    ├── foreground.rs               # best-effort WHAT lookup from PTY foreground process group
     ├── pty.rs                      # PTY open, child spawn, winsize
     ├── terminal.rs                 # local raw-mode guard
     ├── transport.rs                # framed I/O over std::io::Read + std::io::Write
@@ -154,16 +155,39 @@ The `sh -s -- --install` form is intentional: `-s` tells a POSIX shell to read t
 ## Cargo.toml (skeleton)
 
 ```toml
+[package]
+autobins = false
+
+[features]
+default = []
+server-bin = []
+
+[[bin]]
+name = "ssh-obi"
+path = "src/bin/ssh-obi/main.rs"
+
+[[bin]]
+name = "ssh-obi-server"
+path = "src/bin/ssh-obi-server/main.rs"
+required-features = ["server-bin"]
+
 [dependencies]
-nix       = { version = "0.31", features = ["term", "process", "signal", "fs", "user"] }
 ciborium  = "0.2"      # CBOR encoding for protocol bodies
 clap      = { version = "4", features = ["derive"] }
 blake3    = "1"        # session id generation
 chrono    = { version = "0.4", default-features = false, features = ["clock"] }
 serde     = { version = "1", features = ["derive"] }
+
+[target.'cfg(unix)'.dependencies]
+nix       = { version = "0.31", features = ["term", "process", "signal", "fs", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
 ```
 
 `nix` features rationale: `term` covers PTY + termios; `process` covers `fork`/`setsid`; `signal` covers SIGHUP/SIGCHLD/SIGWINCH; `fs` covers `umask`/`chdir` during daemonization; `user` covers uid lookup for per-user socket paths. The broker ↔ daemon UNIX-domain channel uses `std::os::unix::net::UnixStream`.
+
+Cargo binary auto-discovery is disabled. `ssh-obi` is always declared, while `ssh-obi-server` requires the explicit `server-bin` feature so Windows `--bins` builds only the client. Unix release/dev commands that need the server binary must pass `--features server-bin`.
 
 ## Platform support
 
@@ -176,8 +200,9 @@ serde     = { version = "1", features = ["derive"] }
 
 ```sh
 cargo build --release
+cargo build --release --features server-bin --bins
 cargo test
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --features server-bin -- -D warnings
 cargo fmt --all
 ```
 
@@ -210,6 +235,8 @@ These are settled — please don't relitigate without discussion:
 Build `docs/` with `./build-docs.sh`, not by running `mdbook build` directly. mdBook overwrites `docs/` on every build, so `build-docs.sh` must copy every non-mdBook artifact needed by the published site after each build, including `bootstrap.sh`, `.nojekyll`, and any `release-<cargo target>.tar.gz` archives.
 
 Each tarball contains only `LICENSE-APACHE`, `LICENSE-MPL`, `ssh-obi`, and `ssh-obi-server`, except client-only targets where `ssh-obi-server` is omitted.
+
+After the implementation is otherwise complete, add `./build-release.sh`. It should build every listed target with cross-rs, stage only the license files plus the target binaries, and create the corresponding `release-<cargo target>.tar.gz` files with `tar`. `build-docs.sh` then copies those tarballs into `docs/` on every mdBook build.
 
 - `release-x86_64-unknown-linux-musl.tar.gz`
 - `release-x86_64-unknown-freebsd.tar.gz`

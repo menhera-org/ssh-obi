@@ -682,7 +682,39 @@ fn current_window_size() -> io::Result<Option<WindowSize>> {
     }))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn current_window_size() -> io::Result<Option<WindowSize>> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
+    };
+
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Ok(None);
+    }
+
+    let mut info = std::mem::MaybeUninit::<CONSOLE_SCREEN_BUFFER_INFO>::uninit();
+    if unsafe { GetConsoleScreenBufferInfo(handle, info.as_mut_ptr()) } == 0 {
+        return Ok(None);
+    }
+
+    let info = unsafe { info.assume_init() };
+    let rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+    let cols = info.srWindow.Right - info.srWindow.Left + 1;
+    if rows <= 0 || cols <= 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(WindowSize {
+        rows: rows as u16,
+        cols: cols as u16,
+        pixel_width: 0,
+        pixel_height: 0,
+    }))
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn current_window_size() -> io::Result<Option<WindowSize>> {
     Ok(None)
 }
@@ -720,7 +752,12 @@ fn resize_pending() -> bool {
     RESIZE_PENDING.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn resize_pending() -> bool {
+    true
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn resize_pending() -> bool {
     false
 }
