@@ -62,7 +62,7 @@ Each `ssh-obi user@host` invocation goes through this dance over a single SSH co
 
      >
      ```
-4. Client sends the choice (`1`, `2`, …, or `n`); broker connects to the chosen daemon (or spawns a new one); real protocol takes over on the same stdio channel.
+4. Client sends the choice (`1`, `2`, …, or `n`); broker connects to the chosen daemon (or spawns a new one), sends an `AttachedSession` message containing the authoritative session id, and then real PTY forwarding takes over on the same stdio channel.
 
 A session is "free" when no broker is currently attached. Attached sessions are excluded from the picker — one client per session. The picker filter is UX; the **authoritative arbiter is the daemon itself**, which refuses any second broker attach request with a `SessionBusy` control message and closes that requester. Info/listing and detach requests remain valid while a broker is attached. This handles the race between "list sessions" and "attach to chosen one," and the case where two clients both pass `--session ID` for the same active session. The losing client surfaces `session is currently in use` to the user. Override the auto/prompt logic with:
 
@@ -89,7 +89,7 @@ When the user's shell exits normally, the daemon catches SIGCHLD, forwards the e
 
 ### Reconnect resumption
 
-Reconnect is **byte-stream-based**, not screen-state-based. The new broker reattaches, the daemon replays the current ring contents and then resumes live forwarding. This can duplicate output the client already displayed before the disconnect; duplicates are acceptable. Anything older than the ring is gone — the client's terminal scrollback already has it. We do not maintain any states about terminal screens or per-client replay cursors.
+Reconnect is **byte-stream-based**, not screen-state-based. After the first attach, the client knows the authoritative session id from `AttachedSession`; on an ambiguous disconnect it starts a fresh SSH/broker connection and requests that same session id. The new broker reattaches, the daemon replays the current ring contents and then resumes live forwarding. This can duplicate output the client already displayed before the disconnect; duplicates are acceptable. Anything older than the ring is gone — the client's terminal scrollback already has it. We do not maintain any states about terminal screens or per-client replay cursors.
 
 ## Project layout
 
@@ -104,13 +104,10 @@ ssh-obi/
     ├── lib.rs                      # re-exports the modules below as the `ssh_obi` library crate
     ├── protocol.rs                 # wire protocol: framing, capability handshake, control messages
     ├── session.rs                  # session id, listing, picker logic, on-remote enumeration
-    ├── pty.rs                      # PTY open, raw-mode termios, winsize
-    ├── transport.rs                # framed I/O over any AsyncRead + AsyncWrite (SSH stdio or UNIX socket)
+    ├── pty.rs                      # PTY open, child spawn, winsize
+    ├── terminal.rs                 # local raw-mode guard
+    ├── transport.rs                # framed I/O over std::io::Read + std::io::Write
     ├── daemon.rs                   # double-fork + setsid + chdir + umask + stdio redirect; replay ring
-    ├── platform/
-    │   ├── mod.rs
-    │   ├── linger.rs               # Linux: optional process/session survivability diagnostics
-    │   └── foreground.rs           # current foreground command lookup (Linux /proc, BSD sysctl, macOS proc_pidpath)
     └── bin/
         ├── ssh-obi/
         │   └── main.rs             # client: arg parsing, SSH spawn, raw-mode TTY, picker UI, reconnect loop
@@ -158,21 +155,15 @@ The `sh -s -- --install` form is intentional: `-s` tells a POSIX shell to read t
 
 ```toml
 [dependencies]
-nix       = { version = "0.31", features = ["term", "process", "signal", "fs", "socket"] }
-tokio     = { version = "1",    features = ["rt-multi-thread", "macros", "io-util", "net", "signal", "process", "fs"] }
-bytes     = "1"
+nix       = { version = "0.31", features = ["term", "process", "signal", "fs", "user"] }
 ciborium  = "0.2"      # CBOR encoding for protocol bodies
 clap      = { version = "4", features = ["derive"] }
-anyhow    = "1"
-thiserror = "1"
-tracing   = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 blake3    = "1"        # session id generation
-chrono    = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono    = { version = "0.4", default-features = false, features = ["clock"] }
 serde     = { version = "1", features = ["derive"] }
 ```
 
-`nix` features rationale: `term` covers PTY + termios; `process` covers `fork`/`setsid`; `signal` covers SIGHUP/SIGCHLD/SIGWINCH; `fs` covers `umask`/`chdir` during daemonization; `socket` is for the broker ↔ daemon UNIX-domain channel. No defaults (nix has none since 0.27).
+`nix` features rationale: `term` covers PTY + termios; `process` covers `fork`/`setsid`; `signal` covers SIGHUP/SIGCHLD/SIGWINCH; `fs` covers `umask`/`chdir` during daemonization; `user` covers uid lookup for per-user socket paths. The broker ↔ daemon UNIX-domain channel uses `std::os::unix::net::UnixStream`.
 
 ## Platform support
 
@@ -197,7 +188,7 @@ Integration tests pipe a client process directly to a server process (no real SS
 These are settled — please don't relitigate without discussion:
 
 - **`nix` for syscalls, not `libc` directly.** Cleaner errors, fewer `unsafe` blocks, smooths BSD/Linux/macOS differences. Drop to `libc` only for the rare call `nix` doesn't expose.
-- **`tokio` + `AsyncFd` for PTY and socket I/O.** `nix` for setup, tokio for the event loop.
+- **Synchronous std I/O for the MVP.** The current implementation keeps the runtime small: `nix` handles PTY/process/termios setup, and std threads handle SSH stdio and UNIX-socket forwarding.
 - **Hand-rolled daemonization, not the `daemonize` crate.** We need to detach *after* the daemon's UNIX socket has bound, so bind failures can be reported to the user before going silent.
 - **Bounded replay buffer, not screen reconstruction.** No mosh-style framebuffer ownership; the local terminal owns the screen and scrollback.
 - **Session IDs are server-generated**, short (8–10 chars of base32-encoded blake3 over high-resolution monotonic time + random nonce), and unique within a user's session set on a given remote. *Not* derived from client identity — that would be incompatible with multi-machine selection.

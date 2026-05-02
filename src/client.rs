@@ -1,16 +1,18 @@
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{Command, ExitCode, ExitStatus as ProcessExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::Duration;
 
 use crate::bootstrap::{
     INSTALL_OK_MARKER, INSTALL_REQUIRED_MARKER, READY_MARKER, remote_shell_command,
 };
 use crate::cli::{ClientAction, ClientArgs};
 use crate::protocol::{
-    AttachSessionRequest, DetachSessionRequest, ErrorMessage, ExitStatus, MessageType,
-    NewSessionRequest, ProtocolError, PtyData, SessionBusy, SessionList, SessionListRequest,
-    WindowSize,
+    AttachSessionRequest, AttachedSession, DetachSessionRequest, ErrorMessage, ExitStatus, Frame,
+    MessageType, NewSessionRequest, ProtocolError, PtyData, SessionBusy, SessionList,
+    SessionListRequest, WindowSize,
 };
 use crate::session::{
     AutoSelection, SessionIdError, SessionInfo, auto_select, render_session_table,
@@ -18,7 +20,72 @@ use crate::session::{
 use crate::terminal::{RawModeGuard, TerminalError};
 use crate::transport::{FramedReader, FramedWriter};
 
+const RECONNECT_DELAY: Duration = Duration::from_millis(250);
+
+#[cfg(unix)]
+type ClientRawModeGuard = RawModeGuard<std::io::Stdin>;
+
+#[cfg(not(unix))]
+type ClientRawModeGuard = RawModeGuard;
+
 pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
+    if matches!(args.action, ClientAction::List | ClientAction::Detach) {
+        return match run_client_attempt(args, &mut None, 0)? {
+            ClientAttemptResult::Control(code) => Ok(code),
+            ClientAttemptResult::Attached(_) => unreachable!("control action attached"),
+        };
+    }
+
+    let mut attached_io = None;
+    let mut next_args = args.clone();
+    let mut known_session_id = args.session.clone();
+    let mut reconnecting = false;
+    let mut attempt_id = 0;
+
+    loop {
+        attempt_id += 1;
+        let result = run_client_attempt(&next_args, &mut attached_io, attempt_id)?;
+        let ClientAttemptResult::Attached(result) = result else {
+            unreachable!("attach action returned a control result");
+        };
+
+        match result {
+            Ok(success) => return Ok(success.exit_code),
+            Err(failure) if is_ambiguous_disconnect(&failure.error) => {
+                let reached_attached_session = failure.session_id.is_some();
+                let Some(session_id) = failure.session_id.or_else(|| known_session_id.clone())
+                else {
+                    return Err(ClientRunError::ConnectionLostBeforeSessionKnown(Box::new(
+                        failure.error,
+                    )));
+                };
+
+                if reconnecting && !reached_attached_session {
+                    return Err(ClientRunError::ReconnectFailed {
+                        session_id,
+                        source: Box::new(failure.error),
+                    });
+                }
+
+                known_session_id = Some(session_id.clone());
+                reconnecting = true;
+                eprintln!("ssh-obi: connection lost; reconnecting session {session_id}");
+                thread::sleep(RECONNECT_DELAY);
+
+                next_args = args.clone();
+                next_args.action = ClientAction::Attach;
+                next_args.session = Some(session_id);
+            }
+            Err(failure) => return Err(failure.error),
+        }
+    }
+}
+
+fn run_client_attempt(
+    args: &ClientArgs,
+    attached_io: &mut Option<AttachedIo>,
+    attempt_id: u64,
+) -> Result<ClientAttemptResult, ClientRunError> {
     let server_args = server_args_for_action(args);
     let remote_command = remote_shell_command(&server_args);
     let ssh_args = args.ssh_command_args(&remote_command);
@@ -40,43 +107,86 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
         .take()
         .ok_or(ClientRunError::MissingChildStdout)?;
 
-    wait_for_bootstrap(&mut child_stdout, &mut child_stdin)?;
-
-    if let Some(code) = handle_control_action(args, &mut child_stdout, &mut child_stdin)? {
-        let status = child.wait().map_err(ClientRunError::WaitSsh)?;
-        return Ok(if status.success() {
-            code
-        } else {
-            status
-                .code()
-                .and_then(|code| u8::try_from(code).ok())
-                .map(ExitCode::from)
-                .unwrap_or(ExitCode::from(1))
-        });
+    if let Err(err) = wait_for_bootstrap(&mut child_stdout, &mut child_stdin) {
+        let _ = child.wait();
+        return Err(err);
     }
 
-    let attached_status = run_attached_session(child_stdout, child_stdin)?;
+    let initial_action = match handle_initial_action(args, &mut child_stdout, &mut child_stdin) {
+        Ok(action) => action,
+        Err(err) => {
+            let _ = child.wait();
+            return Err(err);
+        }
+    };
+    if let InitialActionResult::Control(code) = initial_action {
+        let status = child.wait().map_err(ClientRunError::WaitSsh)?;
+        return Ok(ClientAttemptResult::Control(exit_code_with_ssh_status(
+            code, status,
+        )));
+    }
+
+    let InitialActionResult::Attached {
+        session_id: initial_session_id,
+    } = initial_action
+    else {
+        unreachable!("control action handled above");
+    };
+    let attached_io = ensure_attached_io(attached_io)?;
+    let attached_result = run_attached_session(
+        child_stdout,
+        child_stdin,
+        initial_session_id,
+        attached_io,
+        attempt_id,
+    );
     let status = child.wait().map_err(ClientRunError::WaitSsh)?;
-    Ok(if status.success() {
-        attached_status
-    } else {
-        status
-            .code()
-            .and_then(|code| u8::try_from(code).ok())
-            .map(ExitCode::from)
-            .unwrap_or(ExitCode::from(1))
-    })
+    Ok(ClientAttemptResult::Attached(attached_result.map(
+        |mut success| {
+            success.exit_code = exit_code_with_ssh_status(success.exit_code, status);
+            success
+        },
+    )))
 }
 
 pub fn server_args_for_action(_args: &ClientArgs) -> Vec<&str> {
     Vec::new()
 }
 
-fn handle_control_action<R, W>(
+#[derive(Debug)]
+enum ClientAttemptResult {
+    Control(ExitCode),
+    Attached(Result<AttachedSessionSuccess, AttachedSessionFailure>),
+}
+
+#[derive(Debug)]
+struct AttachedSessionSuccess {
+    exit_code: ExitCode,
+}
+
+#[derive(Debug)]
+struct AttachedSessionFailure {
+    session_id: Option<String>,
+    error: ClientRunError,
+}
+
+impl AttachedSessionFailure {
+    fn new(session_id: Option<String>, error: ClientRunError) -> Self {
+        Self { session_id, error }
+    }
+}
+
+#[derive(Debug)]
+enum InitialActionResult {
+    Control(ExitCode),
+    Attached { session_id: Option<String> },
+}
+
+fn handle_initial_action<R, W>(
     args: &ClientArgs,
     reader: &mut R,
     writer: &mut W,
-) -> Result<Option<ExitCode>, ClientRunError>
+) -> Result<InitialActionResult, ClientRunError>
 where
     R: Read,
     W: Write,
@@ -111,7 +221,7 @@ where
                 .map(SessionInfo::from_record)
                 .collect::<Result<Vec<_>, _>>()?;
             print!("{}", render_session_table(&sessions, false));
-            Ok(Some(ExitCode::SUCCESS))
+            Ok(InitialActionResult::Control(ExitCode::SUCCESS))
         }
         ClientAction::Detach => {
             let session_id = args
@@ -125,7 +235,7 @@ where
                 &DetachSessionRequest { session_id },
             )?;
             framed_writer.flush()?;
-            Ok(Some(ExitCode::SUCCESS))
+            Ok(InitialActionResult::Control(ExitCode::SUCCESS))
         }
         ClientAction::Attach => {
             let selection = if let Some(session_id) = &args.session {
@@ -135,22 +245,26 @@ where
             };
 
             let InitialClientSelection::Attach(session_id) = selection else {
-                return Ok(None);
+                return Ok(InitialActionResult::Attached { session_id: None });
             };
             let mut framed_writer = FramedWriter::new(writer);
             framed_writer.write_body(
                 MessageType::ATTACH_SESSION,
                 0,
-                &AttachSessionRequest { session_id },
+                &AttachSessionRequest {
+                    session_id: session_id.clone(),
+                },
             )?;
             framed_writer.flush()?;
-            Ok(None)
+            Ok(InitialActionResult::Attached {
+                session_id: Some(session_id),
+            })
         }
         ClientAction::New => {
             let mut framed_writer = FramedWriter::new(writer);
             framed_writer.write_body(MessageType::NEW_SESSION, 0, &NewSessionRequest)?;
             framed_writer.flush()?;
-            Ok(None)
+            Ok(InitialActionResult::Attached { session_id: None })
         }
     }
 }
@@ -256,98 +370,258 @@ where
     Ok(InitialClientSelection::Attach(session.id.to_string()))
 }
 
-fn run_attached_session<R, W>(reader: R, writer: W) -> Result<ExitCode, ClientRunError>
-where
-    R: Read,
-    W: Write + Send + 'static,
-{
-    let _raw_mode = enable_stdin_raw_mode()?;
-    let _stdin_thread = thread::spawn(move || copy_stdin_to_pty(writer));
-    let mut framed_reader = FramedReader::new(reader);
-    let mut stdout = io::stdout().lock();
+#[derive(Debug)]
+struct AttachedIo {
+    _raw_mode: Option<ClientRawModeGuard>,
+    receiver: Receiver<AttachedEvent>,
+    sender: Sender<AttachedEvent>,
+    _stdin_thread: thread::JoinHandle<()>,
+}
 
-    while let Some(frame) = framed_reader.read_frame()? {
-        if frame.msg_type() == MessageType::PTY_DATA {
-            let data: PtyData = frame.decode_body()?;
-            stdout
-                .write_all(&data.bytes)
-                .map_err(ClientRunError::CopyStdout)?;
-            stdout.flush().map_err(ClientRunError::CopyStdout)?;
-            continue;
-        }
+#[derive(Debug)]
+enum AttachedEvent {
+    Stdin(Vec<u8>),
+    StdinEof,
+    StdinError(io::Error),
+    BrokerFrame {
+        attempt_id: u64,
+        result: Result<Option<Frame>, ProtocolError>,
+    },
+}
 
-        if frame.msg_type() == MessageType::CLIENT_SHOULD_EXIT {
-            return Ok(ExitCode::SUCCESS);
-        }
+fn ensure_attached_io(attached_io: &mut Option<AttachedIo>) -> Result<&AttachedIo, ClientRunError> {
+    if attached_io.is_none() {
+        let raw_mode = enable_stdin_raw_mode()?;
+        install_resize_handler();
 
-        if frame.msg_type() == MessageType::EXIT_STATUS {
-            let status: ExitStatus = frame.decode_body()?;
-            return exit_code_from_status(status);
-        }
+        let (sender, receiver) = mpsc::channel();
+        let stdin_sender = sender.clone();
+        let stdin_thread = thread::spawn(move || read_stdin_events(stdin_sender));
 
-        if frame.msg_type() == MessageType::SESSION_BUSY {
-            let busy: SessionBusy = frame.decode_body()?;
-            return Err(ClientRunError::SessionBusy(busy.session_id));
-        }
-
-        if frame.msg_type() == MessageType::ERROR {
-            let error: ErrorMessage = frame.decode_body()?;
-            return Err(ClientRunError::BrokerError(error.message));
-        }
-
-        return Err(ClientRunError::UnexpectedBrokerMessage(
-            frame.msg_type().get(),
-        ));
+        *attached_io = Some(AttachedIo {
+            _raw_mode: raw_mode,
+            receiver,
+            sender,
+            _stdin_thread: stdin_thread,
+        });
     }
 
-    Err(ClientRunError::UnexpectedBrokerEof)
+    Ok(attached_io.as_ref().expect("attached io initialized"))
 }
 
-#[cfg(unix)]
-fn enable_stdin_raw_mode() -> Result<Option<RawModeGuard<std::io::Stdin>>, ClientRunError> {
-    RawModeGuard::enable(io::stdin()).map_err(ClientRunError::Terminal)
-}
-
-#[cfg(not(unix))]
-fn enable_stdin_raw_mode() -> Result<Option<RawModeGuard>, ClientRunError> {
-    RawModeGuard::enable().map_err(ClientRunError::Terminal)
-}
-
-fn copy_stdin_to_pty<W>(writer: W) -> Result<(), ClientRunError>
-where
-    W: Write,
-{
-    let mut writer = FramedWriter::new(writer);
-    install_resize_handler();
-    let mut last_window_size = None;
-    send_window_size_if_changed(&mut writer, &mut last_window_size)?;
-
+fn read_stdin_events(sender: Sender<AttachedEvent>) {
     let mut stdin = io::stdin().lock();
     let mut buf = [0u8; 8192];
 
     loop {
-        if resize_pending() {
-            send_window_size_if_changed(&mut writer, &mut last_window_size)?;
-        }
-
         match stdin.read(&mut buf) {
-            Ok(0) => return Ok(()),
+            Ok(0) => {
+                let _ = sender.send(AttachedEvent::StdinEof);
+                return;
+            }
             Ok(n) => {
-                writer.write_body(
-                    MessageType::PTY_DATA,
-                    0,
-                    &PtyData {
-                        bytes: buf[..n].to_vec(),
-                    },
-                )?;
-                writer.flush()?;
+                if sender
+                    .send(AttachedEvent::Stdin(buf[..n].to_vec()))
+                    .is_err()
+                {
+                    return;
+                }
             }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
-                send_window_size_if_changed(&mut writer, &mut last_window_size)?;
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => {
+                let _ = sender.send(AttachedEvent::StdinError(err));
+                return;
             }
-            Err(err) => return Err(ClientRunError::CopyStdin(err)),
         }
     }
+}
+
+fn run_attached_session<R, W>(
+    reader: R,
+    writer: W,
+    initial_session_id: Option<String>,
+    attached_io: &AttachedIo,
+    attempt_id: u64,
+) -> Result<AttachedSessionSuccess, AttachedSessionFailure>
+where
+    R: Read + Send + 'static,
+    W: Write,
+{
+    spawn_broker_reader(reader, attached_io.sender.clone(), attempt_id);
+    let mut session_id = initial_session_id;
+    let mut writer = FramedWriter::new(writer);
+    let mut stdout = io::stdout().lock();
+    let mut last_window_size = None;
+    let mut stdin_open = true;
+
+    send_window_size_if_changed(&mut writer, &mut last_window_size)
+        .map_err(|err| AttachedSessionFailure::new(session_id.clone(), err))?;
+
+    loop {
+        if resize_pending() {
+            send_window_size_if_changed(&mut writer, &mut last_window_size)
+                .map_err(|err| AttachedSessionFailure::new(session_id.clone(), err))?;
+        }
+
+        let event = match attached_io.receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(event) => event,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(AttachedSessionFailure::new(
+                    session_id,
+                    ClientRunError::UnexpectedBrokerEof,
+                ));
+            }
+        };
+
+        match event {
+            AttachedEvent::Stdin(bytes) if stdin_open => {
+                writer
+                    .write_body(MessageType::PTY_DATA, 0, &PtyData { bytes })
+                    .map_err(|err| {
+                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                    })?;
+                writer.flush().map_err(|err| {
+                    AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                })?;
+            }
+            AttachedEvent::Stdin(_) => {}
+            AttachedEvent::StdinEof => {
+                stdin_open = false;
+            }
+            AttachedEvent::StdinError(err) => {
+                return Err(AttachedSessionFailure::new(
+                    session_id,
+                    ClientRunError::CopyStdin(err),
+                ));
+            }
+            AttachedEvent::BrokerFrame {
+                attempt_id: event_attempt_id,
+                result,
+            } if event_attempt_id == attempt_id => {
+                let Some(frame) = result.map_err(|err| {
+                    AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                })?
+                else {
+                    return Err(AttachedSessionFailure::new(
+                        session_id,
+                        ClientRunError::UnexpectedBrokerEof,
+                    ));
+                };
+
+                if frame.msg_type() == MessageType::ATTACHED_SESSION {
+                    let attached: AttachedSession = frame.decode_body().map_err(|err| {
+                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                    })?;
+                    if let Some(expected) = session_id.as_ref().cloned()
+                        && expected != attached.session_id
+                    {
+                        return Err(AttachedSessionFailure::new(
+                            session_id,
+                            ClientRunError::SessionMismatch {
+                                expected,
+                                actual: attached.session_id,
+                            },
+                        ));
+                    }
+                    session_id = Some(attached.session_id);
+                    continue;
+                }
+
+                if frame.msg_type() == MessageType::PTY_DATA {
+                    let data: PtyData = frame.decode_body().map_err(|err| {
+                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                    })?;
+                    stdout.write_all(&data.bytes).map_err(|err| {
+                        AttachedSessionFailure::new(
+                            session_id.clone(),
+                            ClientRunError::CopyStdout(err),
+                        )
+                    })?;
+                    stdout.flush().map_err(|err| {
+                        AttachedSessionFailure::new(
+                            session_id.clone(),
+                            ClientRunError::CopyStdout(err),
+                        )
+                    })?;
+                    continue;
+                }
+
+                if frame.msg_type() == MessageType::CLIENT_SHOULD_EXIT {
+                    return Ok(AttachedSessionSuccess {
+                        exit_code: ExitCode::SUCCESS,
+                    });
+                }
+
+                if frame.msg_type() == MessageType::EXIT_STATUS {
+                    let status: ExitStatus = frame.decode_body().map_err(|err| {
+                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                    })?;
+                    let exit_code = exit_code_from_status(status)
+                        .map_err(|err| AttachedSessionFailure::new(session_id.clone(), err))?;
+                    return Ok(AttachedSessionSuccess { exit_code });
+                }
+
+                if frame.msg_type() == MessageType::SESSION_BUSY {
+                    let busy: SessionBusy = frame.decode_body().map_err(|err| {
+                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                    })?;
+                    return Err(AttachedSessionFailure::new(
+                        session_id,
+                        ClientRunError::SessionBusy(busy.session_id),
+                    ));
+                }
+
+                if frame.msg_type() == MessageType::ERROR {
+                    let error: ErrorMessage = frame.decode_body().map_err(|err| {
+                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                    })?;
+                    return Err(AttachedSessionFailure::new(
+                        session_id,
+                        ClientRunError::BrokerError(error.message),
+                    ));
+                }
+
+                return Err(AttachedSessionFailure::new(
+                    session_id,
+                    ClientRunError::UnexpectedBrokerMessage(frame.msg_type().get()),
+                ));
+            }
+            AttachedEvent::BrokerFrame { .. } => {}
+        }
+    }
+}
+
+fn spawn_broker_reader<R>(reader: R, sender: Sender<AttachedEvent>, attempt_id: u64)
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut reader = FramedReader::new(reader);
+        loop {
+            let result = reader.read_frame();
+            let should_stop = !matches!(result, Ok(Some(_)));
+            if sender
+                .send(AttachedEvent::BrokerFrame { attempt_id, result })
+                .is_err()
+            {
+                return;
+            }
+            if should_stop {
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(unix)]
+fn enable_stdin_raw_mode() -> Result<Option<ClientRawModeGuard>, ClientRunError> {
+    RawModeGuard::enable(io::stdin()).map_err(ClientRunError::Terminal)
+}
+
+#[cfg(not(unix))]
+fn enable_stdin_raw_mode() -> Result<Option<ClientRawModeGuard>, ClientRunError> {
+    RawModeGuard::enable().map_err(ClientRunError::Terminal)
 }
 
 fn send_window_size_if_changed<W>(
@@ -466,6 +740,28 @@ fn exit_code_from_status(status: ExitStatus) -> Result<ExitCode, ClientRunError>
     Err(ClientRunError::MissingExitStatus)
 }
 
+fn exit_code_with_ssh_status(code: ExitCode, status: ProcessExitStatus) -> ExitCode {
+    if status.success() {
+        return code;
+    }
+
+    status
+        .code()
+        .and_then(|code| u8::try_from(code).ok())
+        .map(ExitCode::from)
+        .unwrap_or(ExitCode::from(1))
+}
+
+fn is_ambiguous_disconnect(error: &ClientRunError) -> bool {
+    matches!(
+        error,
+        ClientRunError::UnexpectedBrokerEof
+            | ClientRunError::Protocol(ProtocolError::Io(_))
+            | ClientRunError::Protocol(ProtocolError::TruncatedHeader)
+            | ClientRunError::Protocol(ProtocolError::TruncatedPayload { .. })
+    )
+}
+
 fn wait_for_bootstrap<R, W>(reader: &mut R, writer: &mut W) -> Result<(), ClientRunError>
 where
     R: Read,
@@ -550,6 +846,15 @@ pub enum ClientRunError {
     UnexpectedBrokerMessage(u8),
     BrokerError(String),
     SessionBusy(String),
+    SessionMismatch {
+        expected: String,
+        actual: String,
+    },
+    ConnectionLostBeforeSessionKnown(Box<ClientRunError>),
+    ReconnectFailed {
+        session_id: String,
+        source: Box<ClientRunError>,
+    },
     Protocol(ProtocolError),
     InvalidSession(SessionIdError),
     InvalidSessionSelection(String),
@@ -584,6 +889,21 @@ impl fmt::Display for ClientRunError {
             Self::SessionBusy(session_id) => {
                 write!(f, "session {session_id} is currently in use")
             }
+            Self::SessionMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "broker attached session {actual}, but client requested {expected}"
+                )
+            }
+            Self::ConnectionLostBeforeSessionKnown(source) => {
+                write!(
+                    f,
+                    "connection lost before the broker identified the session: {source}"
+                )
+            }
+            Self::ReconnectFailed { session_id, source } => {
+                write!(f, "failed to reconnect session {session_id}: {source}")
+            }
             Self::Protocol(err) => write!(f, "protocol error: {err}"),
             Self::InvalidSession(err) => write!(f, "invalid session from broker: {err}"),
             Self::InvalidSessionSelection(selection) => {
@@ -614,6 +934,8 @@ impl std::error::Error for ClientRunError {
             Self::Terminal(err) => Some(err),
             Self::Protocol(err) => Some(err),
             Self::InvalidSession(err) => Some(err),
+            Self::ConnectionLostBeforeSessionKnown(err) => Some(err),
+            Self::ReconnectFailed { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -673,13 +995,16 @@ mod tests {
         }
         let mut output = Vec::new();
 
-        let code = handle_control_action(
+        let action = handle_initial_action(
             &args(ClientAction::Attach),
             &mut input.as_slice(),
             &mut output,
         )
         .unwrap();
-        assert_eq!(code, None);
+        assert!(matches!(
+            action,
+            InitialActionResult::Attached { session_id: None }
+        ));
 
         let mut reader = FramedReader::new(output.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
@@ -699,8 +1024,13 @@ mod tests {
         let input = Vec::new();
         let mut output = Vec::new();
 
-        let code = handle_control_action(&args, &mut input.as_slice(), &mut output).unwrap();
-        assert_eq!(code, None);
+        let action = handle_initial_action(&args, &mut input.as_slice(), &mut output).unwrap();
+        assert!(matches!(
+            action,
+            InitialActionResult::Attached {
+                session_id: Some(id)
+            } if id == "aaaaaaaa"
+        ));
 
         let mut reader = FramedReader::new(output.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
@@ -714,10 +1044,13 @@ mod tests {
         let input = Vec::new();
         let mut output = Vec::new();
 
-        let code =
-            handle_control_action(&args(ClientAction::New), &mut input.as_slice(), &mut output)
+        let action =
+            handle_initial_action(&args(ClientAction::New), &mut input.as_slice(), &mut output)
                 .unwrap();
-        assert_eq!(code, None);
+        assert!(matches!(
+            action,
+            InitialActionResult::Attached { session_id: None }
+        ));
 
         let mut reader = FramedReader::new(output.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
@@ -749,13 +1082,16 @@ mod tests {
         }
 
         let mut output = Vec::new();
-        let code = handle_control_action(
+        let action = handle_initial_action(
             &args(ClientAction::List),
             &mut input.as_slice(),
             &mut output,
         )
         .unwrap();
-        assert_eq!(code, Some(ExitCode::SUCCESS));
+        assert!(matches!(
+            action,
+            InitialActionResult::Control(code) if code == ExitCode::SUCCESS
+        ));
 
         let mut reader = FramedReader::new(output.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();

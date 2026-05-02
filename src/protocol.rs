@@ -42,6 +42,7 @@ impl MessageType {
     pub const WINDOW_SIZE: Self = Self(13);
     pub const EXIT_STATUS: Self = Self(14);
     pub const ERROR: Self = Self(15);
+    pub const ATTACHED_SESSION: Self = Self(16);
 
     pub const fn new(value: u8) -> Self {
         Self(value)
@@ -68,6 +69,7 @@ impl MessageType {
             Self::WINDOW_SIZE => "WindowSize",
             Self::EXIT_STATUS => "ExitStatus",
             Self::ERROR => "Error",
+            Self::ATTACHED_SESSION => "AttachedSession",
             _ => return None,
         })
     }
@@ -268,6 +270,11 @@ pub struct NewSessionRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachSessionRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachedSession {
     pub session_id: String,
 }
 

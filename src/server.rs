@@ -6,9 +6,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::protocol::{
-    AttachSessionRequest, BrokerAttachRequest, DaemonInfo, DaemonInfoRequest, DetachRequest,
-    DetachSessionRequest, ErrorMessage, MessageType, NewSessionRequest, ProtocolError, SessionList,
-    SessionListRequest,
+    AttachSessionRequest, AttachedSession, BrokerAttachRequest, DaemonInfo, DaemonInfoRequest,
+    DetachRequest, DetachSessionRequest, ErrorMessage, MessageType, NewSessionRequest,
+    ProtocolError, SessionList, SessionListRequest,
 };
 use crate::session::{
     SessionIdError, SocketPathError, generate_session_id, list_session_socket_ids,
@@ -84,12 +84,16 @@ where
             #[cfg(unix)]
             {
                 let request: AttachSessionRequest = frame.decode_body()?;
-                let path = socket_path_for_uid(uid, &request.session_id)?;
+                let session_id = request.session_id;
+                let path = socket_path_for_uid(uid, &session_id)?;
                 let daemon = connect_daemon(path)?;
-                let mut daemon_writer =
-                    FramedWriter::new(daemon.try_clone().map_err(ServerError::Connect)?);
-                daemon_writer.write_body(MessageType::BROKER_ATTACH, 0, &BrokerAttachRequest)?;
-                daemon_writer.flush()?;
+                attach_daemon(&daemon)?;
+                writer.write_body(
+                    MessageType::ATTACHED_SESSION,
+                    0,
+                    &AttachedSession { session_id },
+                )?;
+                writer.flush()?;
                 return proxy_attached_session(reader, writer.into_inner(), daemon);
             }
         }
@@ -108,10 +112,15 @@ where
                 let session_id = launch_daemon(uid)?;
                 let path = socket_path_for_uid(uid, session_id.as_str())?;
                 let daemon = connect_daemon(path)?;
-                let mut daemon_writer =
-                    FramedWriter::new(daemon.try_clone().map_err(ServerError::Connect)?);
-                daemon_writer.write_body(MessageType::BROKER_ATTACH, 0, &BrokerAttachRequest)?;
-                daemon_writer.flush()?;
+                attach_daemon(&daemon)?;
+                writer.write_body(
+                    MessageType::ATTACHED_SESSION,
+                    0,
+                    &AttachedSession {
+                        session_id: session_id.to_string(),
+                    },
+                )?;
+                writer.flush()?;
                 return proxy_attached_session(reader, writer.into_inner(), daemon);
             }
         }
@@ -193,6 +202,14 @@ fn connect_daemon(
     socket: impl AsRef<std::path::Path>,
 ) -> Result<std::os::unix::net::UnixStream, ServerError> {
     std::os::unix::net::UnixStream::connect(socket).map_err(ServerError::Connect)
+}
+
+#[cfg(unix)]
+fn attach_daemon(daemon: &std::os::unix::net::UnixStream) -> Result<(), ServerError> {
+    let mut daemon_writer = FramedWriter::new(daemon.try_clone().map_err(ServerError::Connect)?);
+    daemon_writer.write_body(MessageType::BROKER_ATTACH, 0, &BrokerAttachRequest)?;
+    daemon_writer.flush()?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -455,8 +472,8 @@ impl From<SessionIdError> for ServerError {
 mod tests {
     use super::*;
     use crate::protocol::{
-        AttachSessionRequest, BrokerAttachRequest, DetachRequest, ExitStatus, NewSessionRequest,
-        PtyData, SessionListRequest, SessionRecord, UnixTimeMillis,
+        AttachSessionRequest, AttachedSession, BrokerAttachRequest, DetachRequest, ExitStatus,
+        NewSessionRequest, PtyData, SessionListRequest, SessionRecord, UnixTimeMillis,
     };
     use crate::session::prepare_socket_dir;
     use std::fs;
@@ -646,6 +663,11 @@ mod tests {
 
         let mut reader = FramedReader::new(response.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::ATTACHED_SESSION);
+        let attached: AttachedSession = frame.decode_body().unwrap();
+        assert_eq!(attached.session_id, "aaaaaaaa");
+
+        let frame = reader.read_frame().unwrap().unwrap();
         assert_eq!(frame.msg_type(), MessageType::PTY_DATA);
         let data: PtyData = frame.decode_body().unwrap();
         assert_eq!(data.bytes, b"hello");
@@ -724,6 +746,11 @@ mod tests {
             .expect("broker should return after daemon sends exit status");
 
         let mut reader = FramedReader::new(response.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::ATTACHED_SESSION);
+        let attached: AttachedSession = frame.decode_body().unwrap();
+        assert_eq!(attached.session_id, "bbbbbbbb");
+
         let frame = reader.read_frame().unwrap().unwrap();
         assert_eq!(frame.msg_type(), MessageType::EXIT_STATUS);
         let _: ExitStatus = frame.decode_body().unwrap();
