@@ -25,6 +25,7 @@ x86_64-apple-darwin
 aarch64-apple-darwin
 riscv64gc-unknown-linux-musl
 powerpc64le-unknown-linux-musl
+s390x-unknown-linux-musl
 '
 
 default_client_only_targets='
@@ -34,6 +35,7 @@ x86_64-pc-windows-msvc
 cross_server_targets="${CROSS_SERVER_TARGETS-$default_cross_server_targets}"
 zigbuild_server_targets="${ZIGBUILD_SERVER_TARGETS-$default_zigbuild_server_targets}"
 client_only_targets="${CLIENT_ONLY_TARGETS-$default_client_only_targets}"
+build_std_toolchain="${ZIGBUILD_BUILD_STD_TOOLCHAIN:-nightly}"
 
 cleanup() {
     rm -rf "$tmp"
@@ -53,6 +55,7 @@ need_command() {
 need_command "$cross_bin"
 need_command "$zigbuild_bin"
 need_command "$xwin_bin"
+need_command cargo
 need_command rustup
 need_command zig
 
@@ -72,9 +75,21 @@ ensure_rust_target() {
     rustup target add "$target"
 }
 
+ensure_rust_src() {
+    toolchain="$1"
+    rustup component add rust-src --toolchain "$toolchain"
+}
+
 is_darwin_target() {
     case "$1" in
         *-apple-darwin) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+requires_zigbuild_build_std() {
+    case "$1" in
+        s390x-unknown-linux-musl) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -120,6 +135,19 @@ run_zigbuild() {
     fi
 
     "$zigbuild_bin" zigbuild --target-dir "$cargo_target_dir" --release --target "$target" --features server-bin --bins
+}
+
+run_zigbuild_build_std() {
+    target="$1"
+    cargo_target_dir="$2"
+
+    cargo "+$build_std_toolchain" zigbuild \
+        -Z build-std=std,panic_abort \
+        --target-dir "$cargo_target_dir" \
+        --release \
+        --target "$target" \
+        --features server-bin \
+        --bins
 }
 
 run_xwin_client() {
@@ -180,8 +208,13 @@ done
 
 for target in $zigbuild_server_targets; do
     cargo_target_dir="${project_dir}/${target_root}/${target}"
-    ensure_rust_target "$target"
-    run_zigbuild "$target" "$cargo_target_dir"
+    if requires_zigbuild_build_std "$target"; then
+        ensure_rust_src "$build_std_toolchain"
+        run_zigbuild_build_std "$target" "$cargo_target_dir"
+    else
+        ensure_rust_target "$target"
+        run_zigbuild "$target" "$cargo_target_dir"
+    fi
     archive_target "$target" "" 1 "$cargo_target_dir"
 done
 
