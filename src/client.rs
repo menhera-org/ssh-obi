@@ -8,16 +8,15 @@ use crate::bootstrap::{
 };
 use crate::cli::{ClientAction, ClientArgs};
 use crate::protocol::{
-    DetachSessionRequest, MessageType, ProtocolError, SessionList, SessionListRequest,
+    AttachSessionRequest, DetachSessionRequest, ErrorMessage, ExitStatus, MessageType,
+    NewSessionRequest, ProtocolError, PtyData, SessionBusy, SessionList, SessionListRequest,
 };
-use crate::session::{SessionIdError, SessionInfo, render_session_table};
+use crate::session::{
+    AutoSelection, SessionIdError, SessionInfo, auto_select, render_session_table,
+};
 use crate::transport::{FramedReader, FramedWriter};
 
 pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
-    if matches!(args.action, ClientAction::Attach | ClientAction::New) {
-        return Err(ClientRunError::ActionNotImplemented(args.action));
-    }
-
     let server_args = server_args_for_action(args);
     let remote_command = remote_shell_command(&server_args);
     let ssh_args = args.ssh_command_args(&remote_command);
@@ -54,23 +53,17 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
         });
     }
 
-    let stdout_thread = thread::spawn(move || -> io::Result<()> {
-        let mut stdout = io::stdout().lock();
-        io::copy(&mut child_stdout, &mut stdout)?;
-        stdout.flush()
-    });
-
+    let attached_status = run_attached_session(child_stdout, child_stdin)?;
     let status = child.wait().map_err(ClientRunError::WaitSsh)?;
-    stdout_thread
-        .join()
-        .map_err(|_| ClientRunError::StdoutThreadPanicked)?
-        .map_err(ClientRunError::CopyStdout)?;
-
-    Ok(status
-        .code()
-        .and_then(|code| u8::try_from(code).ok())
-        .map(ExitCode::from)
-        .unwrap_or(ExitCode::from(1)))
+    Ok(if status.success() {
+        attached_status
+    } else {
+        status
+            .code()
+            .and_then(|code| u8::try_from(code).ok())
+            .map(ExitCode::from)
+            .unwrap_or(ExitCode::from(1))
+    })
 }
 
 pub fn server_args_for_action(_args: &ClientArgs) -> Vec<&str> {
@@ -89,7 +82,13 @@ where
     match args.action {
         ClientAction::List => {
             let mut framed_writer = FramedWriter::new(writer);
-            framed_writer.write_body(MessageType::SESSION_LIST_REQUEST, 0, &SessionListRequest)?;
+            framed_writer.write_body(
+                MessageType::SESSION_LIST_REQUEST,
+                0,
+                &SessionListRequest {
+                    continue_after_response: false,
+                },
+            )?;
             framed_writer.flush()?;
 
             let mut framed_reader = FramedReader::new(reader);
@@ -126,8 +125,221 @@ where
             framed_writer.flush()?;
             Ok(Some(ExitCode::SUCCESS))
         }
-        ClientAction::Attach | ClientAction::New => Ok(None),
+        ClientAction::Attach => {
+            let selection = if let Some(session_id) = &args.session {
+                InitialClientSelection::Attach(session_id.clone())
+            } else {
+                select_session(reader, writer)?
+            };
+
+            let InitialClientSelection::Attach(session_id) = selection else {
+                return Ok(None);
+            };
+            let mut framed_writer = FramedWriter::new(writer);
+            framed_writer.write_body(
+                MessageType::ATTACH_SESSION,
+                0,
+                &AttachSessionRequest { session_id },
+            )?;
+            framed_writer.flush()?;
+            Ok(None)
+        }
+        ClientAction::New => {
+            let mut framed_writer = FramedWriter::new(writer);
+            framed_writer.write_body(MessageType::NEW_SESSION, 0, &NewSessionRequest)?;
+            framed_writer.flush()?;
+            Ok(None)
+        }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InitialClientSelection {
+    Attach(String),
+    NewAlreadySent,
+}
+
+fn select_session<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<InitialClientSelection, ClientRunError>
+where
+    R: Read,
+    W: Write,
+{
+    {
+        let mut framed_writer = FramedWriter::new(&mut *writer);
+        framed_writer.write_body(
+            MessageType::SESSION_LIST_REQUEST,
+            0,
+            &SessionListRequest {
+                continue_after_response: true,
+            },
+        )?;
+        framed_writer.flush()?;
+    }
+
+    let mut framed_reader = FramedReader::new(reader);
+    let frame = framed_reader
+        .read_frame()?
+        .ok_or(ClientRunError::UnexpectedBrokerEof)?;
+
+    if frame.msg_type() != MessageType::SESSION_LIST {
+        return Err(ClientRunError::UnexpectedBrokerMessage(
+            frame.msg_type().get(),
+        ));
+    }
+
+    let list: SessionList = frame.decode_body()?;
+    let sessions = list
+        .sessions
+        .into_iter()
+        .map(SessionInfo::from_record)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    match auto_select(&sessions) {
+        AutoSelection::NewSession => {
+            let mut framed_writer = FramedWriter::new(writer);
+            framed_writer.write_body(MessageType::NEW_SESSION, 0, &NewSessionRequest)?;
+            framed_writer.flush()?;
+            Ok(InitialClientSelection::NewAlreadySent)
+        }
+        AutoSelection::Attach(session_id) => {
+            Ok(InitialClientSelection::Attach(session_id.to_string()))
+        }
+        AutoSelection::Prompt => prompt_session_selection(&sessions, writer),
+    }
+}
+
+fn prompt_session_selection<W>(
+    sessions: &[SessionInfo],
+    writer: &mut W,
+) -> Result<InitialClientSelection, ClientRunError>
+where
+    W: Write,
+{
+    eprintln!("Select a session to attach:\n");
+    eprint!("{}", render_session_table(sessions, true));
+    eprint!("> ");
+    io::stderr().flush().map_err(ClientRunError::Prompt)?;
+
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(ClientRunError::Prompt)?;
+    let answer = answer.trim();
+
+    if answer == "n" {
+        let mut framed_writer = FramedWriter::new(writer);
+        framed_writer.write_body(MessageType::NEW_SESSION, 0, &NewSessionRequest)?;
+        framed_writer.flush()?;
+        return Ok(InitialClientSelection::NewAlreadySent);
+    }
+
+    let selector = answer
+        .parse::<usize>()
+        .map_err(|_| ClientRunError::InvalidSessionSelection(answer.to_string()))?;
+    if selector == 0 {
+        return Err(ClientRunError::InvalidSessionSelection(answer.to_string()));
+    }
+
+    let Some(session) = sessions
+        .iter()
+        .filter(|session| session.is_selectable())
+        .nth(selector - 1)
+    else {
+        return Err(ClientRunError::InvalidSessionSelection(answer.to_string()));
+    };
+
+    Ok(InitialClientSelection::Attach(session.id.to_string()))
+}
+
+fn run_attached_session<R, W>(reader: R, writer: W) -> Result<ExitCode, ClientRunError>
+where
+    R: Read,
+    W: Write + Send + 'static,
+{
+    let _stdin_thread = thread::spawn(move || copy_stdin_to_pty(writer));
+    let mut framed_reader = FramedReader::new(reader);
+    let mut stdout = io::stdout().lock();
+
+    while let Some(frame) = framed_reader.read_frame()? {
+        if frame.msg_type() == MessageType::PTY_DATA {
+            let data: PtyData = frame.decode_body()?;
+            stdout
+                .write_all(&data.bytes)
+                .map_err(ClientRunError::CopyStdout)?;
+            stdout.flush().map_err(ClientRunError::CopyStdout)?;
+            continue;
+        }
+
+        if frame.msg_type() == MessageType::CLIENT_SHOULD_EXIT {
+            return Ok(ExitCode::SUCCESS);
+        }
+
+        if frame.msg_type() == MessageType::EXIT_STATUS {
+            let status: ExitStatus = frame.decode_body()?;
+            return exit_code_from_status(status);
+        }
+
+        if frame.msg_type() == MessageType::SESSION_BUSY {
+            let busy: SessionBusy = frame.decode_body()?;
+            return Err(ClientRunError::SessionBusy(busy.session_id));
+        }
+
+        if frame.msg_type() == MessageType::ERROR {
+            let error: ErrorMessage = frame.decode_body()?;
+            return Err(ClientRunError::BrokerError(error.message));
+        }
+
+        return Err(ClientRunError::UnexpectedBrokerMessage(
+            frame.msg_type().get(),
+        ));
+    }
+
+    Err(ClientRunError::UnexpectedBrokerEof)
+}
+
+fn copy_stdin_to_pty<W>(writer: W) -> Result<(), ClientRunError>
+where
+    W: Write,
+{
+    let mut writer = FramedWriter::new(writer);
+    let mut stdin = io::stdin().lock();
+    let mut buf = [0u8; 8192];
+
+    loop {
+        match stdin.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(n) => {
+                writer.write_body(
+                    MessageType::PTY_DATA,
+                    0,
+                    &PtyData {
+                        bytes: buf[..n].to_vec(),
+                    },
+                )?;
+                writer.flush()?;
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(ClientRunError::CopyStdin(err)),
+        }
+    }
+}
+
+fn exit_code_from_status(status: ExitStatus) -> Result<ExitCode, ClientRunError> {
+    if let Some(code) = status.code {
+        return Ok(u8::try_from(code)
+            .ok()
+            .map(ExitCode::from)
+            .unwrap_or(ExitCode::from(1)));
+    }
+
+    if status.signal.is_some() {
+        return Ok(ExitCode::from(1));
+    }
+
+    Err(ClientRunError::MissingExitStatus)
 }
 
 fn wait_for_bootstrap<R, W>(reader: &mut R, writer: &mut W) -> Result<(), ClientRunError>
@@ -212,13 +424,16 @@ pub enum ClientRunError {
     RemoteBootstrap(String),
     UnexpectedBrokerEof,
     UnexpectedBrokerMessage(u8),
+    BrokerError(String),
+    SessionBusy(String),
     Protocol(ProtocolError),
     InvalidSession(SessionIdError),
+    InvalidSessionSelection(String),
     MissingSessionForDetach,
-    ActionNotImplemented(ClientAction),
     WaitSsh(io::Error),
+    CopyStdin(io::Error),
     CopyStdout(io::Error),
-    StdoutThreadPanicked,
+    MissingExitStatus,
 }
 
 impl fmt::Display for ClientRunError {
@@ -239,21 +454,20 @@ impl fmt::Display for ClientRunError {
             Self::UnexpectedBrokerMessage(msg_type) => {
                 write!(f, "broker returned unexpected message type {msg_type}")
             }
+            Self::BrokerError(message) => write!(f, "broker returned error: {message}"),
+            Self::SessionBusy(session_id) => {
+                write!(f, "session {session_id} is currently in use")
+            }
             Self::Protocol(err) => write!(f, "protocol error: {err}"),
             Self::InvalidSession(err) => write!(f, "invalid session from broker: {err}"),
-            Self::MissingSessionForDetach => write!(f, "--detach requires --session ID"),
-            Self::ActionNotImplemented(action) => {
-                let action = match action {
-                    ClientAction::Attach => "attach",
-                    ClientAction::New => "new session",
-                    ClientAction::List => "list",
-                    ClientAction::Detach => "detach",
-                };
-                write!(f, "{action} is not implemented yet")
+            Self::InvalidSessionSelection(selection) => {
+                write!(f, "invalid session selection: {selection}")
             }
+            Self::MissingSessionForDetach => write!(f, "--detach requires --session ID"),
             Self::WaitSsh(err) => write!(f, "failed to wait for ssh: {err}"),
+            Self::CopyStdin(err) => write!(f, "failed to copy stdin to session: {err}"),
             Self::CopyStdout(err) => write!(f, "failed to copy ssh stdout: {err}"),
-            Self::StdoutThreadPanicked => write!(f, "stdout copy thread panicked"),
+            Self::MissingExitStatus => write!(f, "session ended without an exit status"),
         }
     }
 }
@@ -266,6 +480,7 @@ impl std::error::Error for ClientRunError {
             | Self::WriteBootstrap(err)
             | Self::Prompt(err)
             | Self::WaitSsh(err)
+            | Self::CopyStdin(err)
             | Self::CopyStdout(err) => Some(err),
             Self::Protocol(err) => Some(err),
             Self::InvalidSession(err) => Some(err),
@@ -312,12 +527,72 @@ mod tests {
     }
 
     #[test]
-    fn attach_action_fails_fast_until_attach_is_implemented() {
-        let err = run_client(&args(ClientAction::Attach)).unwrap_err();
-        assert!(matches!(
-            err,
-            ClientRunError::ActionNotImplemented(ClientAction::Attach)
-        ));
+    fn attach_action_with_no_sessions_requests_new_session() {
+        let mut input = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut input);
+            writer
+                .write_body(
+                    MessageType::SESSION_LIST,
+                    0,
+                    &SessionList {
+                        sessions: Vec::new(),
+                    },
+                )
+                .unwrap();
+        }
+        let mut output = Vec::new();
+
+        let code = handle_control_action(
+            &args(ClientAction::Attach),
+            &mut input.as_slice(),
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(code, None);
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::SESSION_LIST_REQUEST);
+        let request: SessionListRequest = frame.decode_body().unwrap();
+        assert!(request.continue_after_response);
+
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::NEW_SESSION);
+        let _: NewSessionRequest = frame.decode_body().unwrap();
+    }
+
+    #[test]
+    fn attach_action_writes_attach_request() {
+        let mut args = args(ClientAction::Attach);
+        args.session = Some("aaaaaaaa".to_string());
+        let input = Vec::new();
+        let mut output = Vec::new();
+
+        let code = handle_control_action(&args, &mut input.as_slice(), &mut output).unwrap();
+        assert_eq!(code, None);
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::ATTACH_SESSION);
+        let request: AttachSessionRequest = frame.decode_body().unwrap();
+        assert_eq!(request.session_id, "aaaaaaaa");
+    }
+
+    #[test]
+    fn new_action_writes_new_session_request() {
+        let input = Vec::new();
+        let mut output = Vec::new();
+
+        let code =
+            handle_control_action(&args(ClientAction::New), &mut input.as_slice(), &mut output)
+                .unwrap();
+        assert_eq!(code, None);
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::NEW_SESSION);
+        let _: NewSessionRequest = frame.decode_body().unwrap();
     }
 
     #[test]
@@ -355,5 +630,7 @@ mod tests {
         let mut reader = FramedReader::new(output.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
         assert_eq!(frame.msg_type(), MessageType::SESSION_LIST_REQUEST);
+        let request: SessionListRequest = frame.decode_body().unwrap();
+        assert!(!request.continue_after_response);
     }
 }

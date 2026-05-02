@@ -240,7 +240,9 @@ impl<'de> Deserialize<'de> for UnixTimeMillis {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionListRequest;
+pub struct SessionListRequest {
+    pub continue_after_response: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetachSessionRequest {
