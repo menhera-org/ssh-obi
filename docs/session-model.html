@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fa2ee870.js";
+            window.path_to_searchindex_js = "searchindex-743bc165.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6266f562.js"></script>
@@ -182,6 +182,9 @@ many SSH connections.</p>
 available.</p>
 <p>Use <code>ssh-obi --new user@host</code> to always create a new session.</p>
 <p>Use <code>ssh-obi --session ID user@host</code> to attach to a specific session.</p>
+<p>New sessions start the remote user’s shell as a login shell, using the usual
+leading-dash argv[0] convention such as <code>-bash</code> or <code>-zsh</code>. This lets shell
+startup behavior match interactive SSH more closely.</p>
 <h2 id="busy-sessions"><a class="header" href="#busy-sessions">Busy Sessions</a></h2>
 <p>A session can have only one attached client. If another client is already
 attached, the session is busy.</p>

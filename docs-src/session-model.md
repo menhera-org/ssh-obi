@@ -12,6 +12,10 @@ Use `ssh-obi --new user@host` to always create a new session.
 
 Use `ssh-obi --session ID user@host` to attach to a specific session.
 
+New sessions start the remote user's shell as a login shell, using the usual
+leading-dash argv[0] convention such as `-bash` or `-zsh`. This lets shell
+startup behavior match interactive SSH more closely.
+
 ## Busy Sessions
 
 A session can have only one attached client. If another client is already

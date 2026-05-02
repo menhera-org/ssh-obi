@@ -30,6 +30,7 @@ pub fn open_pty(size: Option<WindowSize>) -> Result<PtyPair, PtyError> {
 #[cfg(all(unix, not(target_os = "aix")))]
 pub fn spawn_pty_command(
     program: &str,
+    argv0: Option<&str>,
     args: &[&str],
     env_overrides: &[(&str, &str)],
     size: Option<WindowSize>,
@@ -39,9 +40,12 @@ pub fn spawn_pty_command(
     use nix::pty::ForkptyResult;
     use nix::unistd::execvp;
 
+    let default_argv0 = program;
     let program = CString::new(program).map_err(|_| PtyError::NulByte("program"))?;
+    let argv0 =
+        CString::new(argv0.unwrap_or(default_argv0)).map_err(|_| PtyError::NulByte("argument"))?;
     let mut argv = Vec::with_capacity(args.len() + 1);
-    argv.push(program.clone());
+    argv.push(argv0);
     for arg in args {
         argv.push(CString::new(*arg).map_err(|_| PtyError::NulByte("argument"))?);
     }
@@ -233,6 +237,7 @@ mod tests {
 
         let child = spawn_pty_command(
             "/bin/sh",
+            None,
             &["-c", "printf '%s' \"$SSH_OBI_TEST_VALUE\""],
             &[("SSH_OBI_TEST_VALUE", "pty-ok")],
             Some(WindowSize {

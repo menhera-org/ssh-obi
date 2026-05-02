@@ -132,9 +132,11 @@ mod runtime {
 
         daemonize_after_bind()?;
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let shell = shell_to_spawn();
+        let shell_argv0 = login_shell_argv0(&shell);
         let pty = spawn_pty_command(
             &shell,
+            Some(&shell_argv0),
             &[],
             &[
                 (ENV_SESSION, session_id.as_str()),
@@ -473,6 +475,32 @@ mod runtime {
             .to_string()
     }
 
+    fn shell_to_spawn() -> String {
+        if let Ok(shell) = std::env::var("SHELL")
+            && !shell.is_empty()
+        {
+            return shell;
+        }
+
+        match nix::unistd::User::from_uid(nix::unistd::Uid::current()) {
+            Ok(Some(user)) if !user.shell.as_os_str().is_empty() => {
+                user.shell.to_string_lossy().into_owned()
+            }
+            _ => "/bin/sh".to_string(),
+        }
+    }
+
+    fn login_shell_argv0(shell: &str) -> String {
+        let shell_path = PathBuf::from(shell);
+        let name = shell_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("sh");
+
+        format!("-{name}")
+    }
+
     fn unix_time_millis(time: SystemTime) -> UnixTimeMillis {
         UnixTimeMillis(
             time.duration_since(UNIX_EPOCH)
@@ -626,6 +654,23 @@ mod runtime {
     impl From<ProtocolError> for DaemonError {
         fn from(value: ProtocolError) -> Self {
             Self::Protocol(value)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn login_shell_argv0_prefixes_shell_basename() {
+            assert_eq!(login_shell_argv0("/bin/bash"), "-bash");
+            assert_eq!(login_shell_argv0("/usr/local/bin/zsh"), "-zsh");
+            assert_eq!(login_shell_argv0("fish"), "-fish");
+        }
+
+        #[test]
+        fn login_shell_argv0_falls_back_for_empty_basename() {
+            assert_eq!(login_shell_argv0("/"), "-sh");
         }
     }
 }
