@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
-use ssh_obi::cli::{ClientAction, parse_client_args};
+use ssh_obi::cli::parse_client_args;
+use ssh_obi::client::run_client;
 
 fn main() -> ExitCode {
     let args = std::env::args_os().skip(1);
@@ -12,16 +13,11 @@ fn main() -> ExitCode {
         }
     };
 
-    let action = match parsed.action {
-        ClientAction::Attach => "attach",
-        ClientAction::New => "new",
-        ClientAction::List => "list",
-        ClientAction::Detach => "detach",
-    };
-
-    eprintln!(
-        "ssh-obi: {action} is parsed but not implemented yet for {}",
-        parsed.destination.to_string_lossy()
-    );
-    ExitCode::from(70)
+    match run_client(&parsed) {
+        Ok(code) => code,
+        Err(err) => {
+            eprintln!("ssh-obi: {err}");
+            ExitCode::from(1)
+        }
+    }
 }

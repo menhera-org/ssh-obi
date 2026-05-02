@@ -128,10 +128,10 @@ Stable across all major versions. Forward-compatible by design:
 
 ## Auto-install over SSH
 
-A single SSH invocation handles "install if needed, then attach" with one auth round-trip:
+A single SSH invocation handles "install if needed, then attach" with one auth round-trip. The embedded bootstrap script is passed as the remote command body, not streamed over SSH stdin, because stdin must remain available for install confirmation and then the broker protocol after `ssh-obi-server` is exec'd:
 
 ```sh
-ssh host 'sh -s -- <args>' < bootstrap.sh
+ssh -T host 'sh -c <embedded-bootstrap> sh <args>'
 ```
 
 Bootstrap behavior on the remote:

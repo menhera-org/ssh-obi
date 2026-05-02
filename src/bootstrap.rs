@@ -6,7 +6,11 @@ pub const INSTALL_REQUIRED_MARKER: &str = "OBI-INSTALL-REQUIRED";
 pub const INSTALL_OK_MARKER: &str = "OBI-INSTALL-OK";
 
 pub fn remote_shell_command(server_args: &[&str]) -> String {
-    let mut command = format!("sh -s -- {}", shell_quote(CURRENT_PROTOCOL_BASELINE));
+    let mut command = format!(
+        "sh -c {} sh {}",
+        shell_quote(SCRIPT),
+        shell_quote(CURRENT_PROTOCOL_BASELINE)
+    );
     for arg in server_args {
         command.push(' ');
         command.push_str(&shell_quote(arg));
@@ -39,11 +43,18 @@ mod tests {
 
     #[test]
     fn remote_command_runs_stdin_script_with_baseline() {
-        assert_eq!(remote_shell_command(&[]), "sh -s -- 0.1");
+        let command = remote_shell_command(&[]);
+        assert!(command.starts_with("sh -c '"));
+        assert!(command.ends_with(" sh 0.1"));
     }
 
     #[test]
     fn remote_command_passes_server_args() {
-        assert_eq!(remote_shell_command(&["--detach"]), "sh -s -- 0.1 --detach");
+        assert!(remote_shell_command(&["--detach"]).ends_with(" sh 0.1 --detach"));
+    }
+
+    #[test]
+    fn shell_quote_handles_single_quotes() {
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
     }
 }

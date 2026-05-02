@@ -1,8 +1,10 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local};
+
+use crate::protocol::{SessionRecord, UnixTimeMillis};
 
 pub const SOCKET_PATH_LIMIT: usize = 100;
 
@@ -141,6 +143,24 @@ impl SessionInfo {
     pub fn is_selectable(&self) -> bool {
         self.state.is_free()
     }
+
+    pub fn from_record(record: SessionRecord) -> Result<Self, SessionIdError> {
+        Ok(Self {
+            id: SessionId::new(record.session_id)?,
+            init_time: system_time_from_millis(record.init_time),
+            last_detach_time: record.last_detach_time.map(system_time_from_millis),
+            current_command: record.current_command,
+            state: if record.attached {
+                SessionState::Busy
+            } else {
+                SessionState::Free
+            },
+        })
+    }
+}
+
+fn system_time_from_millis(millis: UnixTimeMillis) -> SystemTime {
+    UNIX_EPOCH + Duration::from_millis(millis.0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +222,34 @@ pub fn picker_rows(sessions: &[SessionInfo]) -> Vec<PickerRow> {
         .collect()
 }
 
+pub fn render_session_table(sessions: &[SessionInfo], include_new: bool) -> String {
+    let rows = picker_rows(sessions);
+    let mut output = String::new();
+    output.push_str("  #   STATE  INIT              DETACH            WHAT\n");
+
+    for row in rows {
+        let selector = row
+            .selector
+            .map(|selector| selector.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let state = match row.state {
+            SessionState::Free => "free",
+            SessionState::Busy => "busy",
+        };
+
+        output.push_str(&format!(
+            "{selector:>3}   {state:<5}  {:<16}  {:<16}  {}\n",
+            row.init_time, row.detach_time, row.current_command
+        ));
+    }
+
+    if include_new {
+        output.push_str("  n   new\n");
+    }
+
+    output
+}
+
 fn display_time(time: SystemTime) -> String {
     let local: DateTime<Local> = time.into();
     local.format("%Y-%m-%d %H:%M").to_string()
@@ -210,8 +258,6 @@ fn display_time(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-    use std::time::UNIX_EPOCH;
 
     fn session(id: &str, state: SessionState) -> SessionInfo {
         SessionInfo {
@@ -258,6 +304,42 @@ mod tests {
         assert_eq!(rows[1].selector, Some(1));
         assert_eq!(rows[2].selector, Some(2));
         assert_eq!(rows[0].detach_time, "-");
+    }
+
+    #[test]
+    fn session_table_marks_busy_rows_unselectable() {
+        let table = render_session_table(
+            &[
+                session("aaaaaaaa", SessionState::Busy),
+                session("bbbbbbbb", SessionState::Free),
+            ],
+            true,
+        );
+
+        assert!(table.contains("  -   busy"));
+        assert!(table.contains("  1   free"));
+        assert!(table.contains("  n   new"));
+    }
+
+    #[test]
+    fn session_info_converts_from_protocol_record() {
+        let info = SessionInfo::from_record(SessionRecord {
+            session_id: "aaaaaaaa".to_string(),
+            init_time: UnixTimeMillis(1_000),
+            last_detach_time: Some(UnixTimeMillis(2_000)),
+            current_command: "vim notes.md".to_string(),
+            attached: true,
+        })
+        .unwrap();
+
+        assert_eq!(info.id.as_str(), "aaaaaaaa");
+        assert_eq!(info.init_time, UNIX_EPOCH + Duration::from_secs(1));
+        assert_eq!(
+            info.last_detach_time,
+            Some(UNIX_EPOCH + Duration::from_secs(2))
+        );
+        assert_eq!(info.current_command, "vim notes.md");
+        assert_eq!(info.state, SessionState::Busy);
     }
 
     #[test]
