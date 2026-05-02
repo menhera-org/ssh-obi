@@ -35,10 +35,9 @@ pub fn spawn_pty_command(
     size: Option<WindowSize>,
 ) -> Result<PtyChild, PtyError> {
     use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
 
     use nix::pty::ForkptyResult;
-    use nix::unistd::execvpe;
+    use nix::unistd::execvp;
 
     let program = CString::new(program).map_err(|_| PtyError::NulByte("program"))?;
     let mut argv = Vec::with_capacity(args.len() + 1);
@@ -47,43 +46,33 @@ pub fn spawn_pty_command(
         argv.push(CString::new(*arg).map_err(|_| PtyError::NulByte("argument"))?);
     }
 
-    let override_names = env_overrides
-        .iter()
-        .map(|(name, _)| name.as_bytes())
-        .collect::<Vec<_>>();
-    let mut envp = Vec::new();
-    for (name, value) in std::env::vars_os() {
-        let name = name.as_os_str().as_bytes();
-        if override_names.contains(&name) {
-            continue;
-        }
-
-        let value = value.as_os_str().as_bytes();
-        let mut entry = Vec::with_capacity(name.len() + value.len() + 1);
-        entry.extend_from_slice(name);
-        entry.push(b'=');
-        entry.extend_from_slice(value);
-        envp.push(CString::new(entry).map_err(|_| PtyError::NulByte("environment"))?);
-    }
+    let mut env = Vec::with_capacity(env_overrides.len());
     for (name, value) in env_overrides {
         if name.as_bytes().contains(&b'=') {
             return Err(PtyError::InvalidEnvironmentName((*name).to_string()));
         }
 
-        let mut entry = Vec::with_capacity(name.len() + value.len() + 1);
-        entry.extend_from_slice(name.as_bytes());
-        entry.push(b'=');
-        entry.extend_from_slice(value.as_bytes());
-        envp.push(CString::new(entry).map_err(|_| PtyError::NulByte("environment"))?);
+        env.push((
+            CString::new(*name).map_err(|_| PtyError::NulByte("environment"))?,
+            CString::new(*value).map_err(|_| PtyError::NulByte("environment"))?,
+        ));
     }
 
     let winsize = size.map(to_nix_winsize);
     // SAFETY: forkpty is called before this function starts any threads. The child branch only
-    // invokes execvpe with prebuilt C strings, then _exit if exec fails.
+    // applies prebuilt environment overrides, invokes execvp with prebuilt C strings, then _exit
+    // if setup or exec fails.
     match unsafe { nix::pty::forkpty(winsize.as_ref(), None) }.map_err(PtyError::Fork)? {
         ForkptyResult::Parent { child, master } => Ok(PtyChild { master, child }),
         ForkptyResult::Child => {
-            let _ = execvpe(&program, &argv, &envp);
+            for (name, value) in &env {
+                if unsafe { nix::libc::setenv(name.as_ptr(), value.as_ptr(), 1) } != 0 {
+                    // SAFETY: We are in the post-fork child and cannot recover from environment
+                    // setup failure before exec.
+                    unsafe { nix::libc::_exit(127) };
+                }
+            }
+            let _ = execvp(&program, &argv);
             // SAFETY: We are in the post-fork child and exec failed; _exit avoids running parent
             // Rust destructors in the child process.
             unsafe { nix::libc::_exit(127) };

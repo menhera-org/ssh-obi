@@ -8,6 +8,8 @@ mdbook build
 # mdBook overwrites docs/, so every file GitHub Pages needs but mdBook does
 # not generate must be copied after each build.
 cp ./bootstrap.sh docs/bootstrap.sh
+cp ./bootstrap.bat docs/bootstrap.bat
+cp ./bootstrap.ps1 docs/bootstrap.ps1
 
 if [ -f ./.nojekyll ]; then
     cp ./.nojekyll docs/.nojekyll

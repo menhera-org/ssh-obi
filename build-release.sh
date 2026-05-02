@@ -3,24 +3,36 @@
 set -eu
 
 cross_bin="${CROSS:-cross}"
+zigbuild_bin="${CARGO_ZIGBUILD:-cargo-zigbuild}"
 out_dir="${OUT_DIR:-.}"
+target_root="${RELEASE_TARGET_ROOT:-target/release-build}"
 tmp="${TMPDIR:-/tmp}/ssh-obi-release.$$"
+project_dir="$(pwd -P)"
+: "${MACOSX_DEPLOYMENT_TARGET:=11.0}"
+export MACOSX_DEPLOYMENT_TARGET
 
-server_targets='
+default_cross_server_targets='
 x86_64-unknown-linux-musl
 x86_64-unknown-freebsd
 x86_64-unknown-illumos
+aarch64-unknown-linux-musl
+'
+
+default_zigbuild_server_targets='
 x86_64-apple-darwin
+aarch64-apple-darwin
 x86_64-unknown-netbsd
 riscv64gc-unknown-linux-musl
-aarch64-unknown-linux-musl
-aarch64-apple-darwin
 powerpc64le-unknown-linux-musl
 '
 
-client_only_targets='
+default_client_only_targets='
 x86_64-pc-windows-gnu
 '
+
+cross_server_targets="${CROSS_SERVER_TARGETS-$default_cross_server_targets}"
+zigbuild_server_targets="${ZIGBUILD_SERVER_TARGETS-$default_zigbuild_server_targets}"
+client_only_targets="${CLIENT_ONLY_TARGETS-$default_client_only_targets}"
 
 cleanup() {
     rm -rf "$tmp"
@@ -29,11 +41,83 @@ trap cleanup EXIT HUP INT TERM
 
 mkdir -p "$out_dir" "$tmp"
 
+need_command() {
+    command="$1"
+    if ! command -v "$command" >/dev/null 2>&1; then
+        printf 'missing required command: %s\n' "$command" >&2
+        exit 1
+    fi
+}
+
+need_command "$cross_bin"
+need_command "$zigbuild_bin"
+need_command rustup
+need_command zig
+
+ensure_rust_target() {
+    target="$1"
+    rustup target add "$target"
+}
+
+is_darwin_target() {
+    case "$1" in
+        *-apple-darwin) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+relative_path_from_project() {
+    path="$1"
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$path" "$project_dir"
+        return
+    fi
+
+    printf 'python3 is required when SDKROOT is absolute; set SDKROOT relative to the repository instead\n' >&2
+    exit 1
+}
+
+run_zigbuild() {
+    target="$1"
+    cargo_target_dir="$2"
+
+    if is_darwin_target "$target" && [ -n "${SDKROOT:-}" ]; then
+        case "$SDKROOT" in
+            /*)
+                if [ ! -d "$SDKROOT" ]; then
+                    printf 'SDKROOT does not exist: %s\n' "$SDKROOT" >&2
+                    exit 1
+                fi
+
+                sdkroot_relative="$(relative_path_from_project "$SDKROOT")"
+                (
+                    cd "$project_dir"
+                    SDKROOT="$sdkroot_relative" "$zigbuild_bin" zigbuild \
+                        --manifest-path "$project_dir/Cargo.toml" \
+                        --target-dir "$cargo_target_dir" \
+                        --release \
+                        --target "$target" \
+                        --features server-bin \
+                        --bins
+                )
+                return
+                ;;
+        esac
+    fi
+
+    "$zigbuild_bin" zigbuild --target-dir "$cargo_target_dir" --release --target "$target" --features server-bin --bins
+}
+
+# Cargo host artifacts, including build-script executables, are not portable
+# across cross images with different glibc baselines. Keep a separate target
+# directory per release target so each image executes the build scripts it built.
 archive_target() {
     target="$1"
     exe_suffix="$2"
     include_server="$3"
-    build_dir="target/${target}/release"
+    cargo_target_dir="$4"
+    build_dir="${cargo_target_dir}/${target}/release"
     stage="${tmp}/${target}"
     archive="${out_dir}/release-${target}.tar.gz"
 
@@ -60,9 +144,17 @@ archive_target() {
     printf '%s\n' "$archive"
 }
 
-for target in $server_targets; do
-    "$cross_bin" build --release --target "$target" --features server-bin --bins
-    archive_target "$target" "" 1
+for target in $cross_server_targets; do
+    cargo_target_dir="${project_dir}/${target_root}/${target}"
+    "$cross_bin" build --target-dir "$cargo_target_dir" --release --target "$target" --features server-bin --bins
+    archive_target "$target" "" 1 "$cargo_target_dir"
+done
+
+for target in $zigbuild_server_targets; do
+    cargo_target_dir="${project_dir}/${target_root}/${target}"
+    ensure_rust_target "$target"
+    run_zigbuild "$target" "$cargo_target_dir"
+    archive_target "$target" "" 1 "$cargo_target_dir"
 done
 
 for target in $client_only_targets; do
@@ -71,6 +163,7 @@ for target in $client_only_targets; do
         *) exe_suffix="" ;;
     esac
 
-    "$cross_bin" build --release --target "$target" --bin ssh-obi
-    archive_target "$target" "$exe_suffix" 0
+    cargo_target_dir="${project_dir}/${target_root}/${target}"
+    "$cross_bin" build --target-dir "$cargo_target_dir" --release --target "$target" --bin ssh-obi
+    archive_target "$target" "$exe_suffix" 0 "$cargo_target_dir"
 done

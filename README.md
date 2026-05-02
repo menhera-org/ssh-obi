@@ -100,8 +100,10 @@ ssh-obi/
 ├── LICENSE-MPL
 ├── README.md
 ├── bootstrap.sh                    # embedded into the client via include_str!
+├── bootstrap.bat                   # Windows cmd.exe client installer
+├── bootstrap.ps1                   # Windows PowerShell client installer
 ├── build-docs.sh                   # builds mdBook and re-copies published artifacts into docs/
-├── build-release.sh                # builds release tarballs with cross-rs and tar
+├── build-release.sh                # builds release tarballs with cross-rs, cargo-zigbuild, and tar
 └── src/
     ├── lib.rs                      # re-exports the modules below as the `ssh_obi` library crate
     ├── protocol.rs                 # wire protocol: framing, capability handshake, control messages
@@ -153,6 +155,20 @@ wget -O - https://obi.menhera.org/bootstrap.sh | sh -s -- --install
 ```
 
 The `sh -s -- --install` form is intentional: `-s` tells a POSIX shell to read the script from stdin, and `--` ends shell option parsing before passing `--install` to the script. Do not use `sh - -- --install`; portable `/bin/sh` implementations treat the first `--` as a script filename, not as "read from stdin." In install-only mode, the script skips the interactive `OBI-INSTALL-REQUIRED` confirmation, installs or verifies `~/.ssh-obi/bin/ssh-obi-server`, prints `OBI-INSTALL-COMPLETE`, and exits without execing the server.
+
+Windows has separate client-only bootstraps because Windows is not a supported server platform. PowerShell is preferred:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://obi.menhera.org/bootstrap.ps1 | iex"
+```
+
+`cmd.exe` cannot execute a batch file directly from an HTTPS URL, and batch files do not have a portable `sh -s` equivalent with arguments. Download the batch file to a temporary path, then run it:
+
+```bat
+curl.exe -fsSL -o "%TEMP%\ssh-obi-bootstrap.bat" https://obi.menhera.org/bootstrap.bat && "%TEMP%\ssh-obi-bootstrap.bat" --install
+```
+
+Both Windows bootstraps install the client-only `release-x86_64-pc-windows-gnu.tar.gz`, copy `ssh-obi.exe` to `%USERPROFILE%\.ssh-obi\bin`, add that directory to the user's PATH, print `OBI-INSTALL-COMPLETE`, and exit without starting a server.
 
 ## Cargo.toml (skeleton)
 
@@ -232,13 +248,13 @@ These are settled — please don't relitigate without discussion:
 
 ## mdBook-based obi.menhera.org site
 
-`docs/` hosts a mdBook-generated documentation website and it is not `.gitignore`-d. It is to be served by GitHub pages. It is to contain `cross-rs`-compiled tarballs, named like `release-<cargo target>.tar.gz` ('release' is literal, not a version). The release archive is unpacked using a maximally-portable set of commands. No GNUism, no BSDism, etc. Signature verification is skipped for MVP, trusting HTTPS. It will be located at `https://obi.menhera.org/`.
+`docs/` hosts a mdBook-generated documentation website and it is not `.gitignore`-d. It is to be served by GitHub pages. It is to contain release tarballs built with cross-rs or `cargo-zigbuild`, named like `release-<cargo target>.tar.gz` ('release' is literal, not a version). The release archive is unpacked using a maximally-portable set of commands. No GNUism, no BSDism, etc. Signature verification is skipped for MVP, trusting HTTPS. It will be located at `https://obi.menhera.org/`.
 
-Build `docs/` with `./build-docs.sh`, not by running `mdbook build` directly. mdBook overwrites `docs/` on every build, so `build-docs.sh` must copy every non-mdBook artifact needed by the published site after each build, including `bootstrap.sh`, `.nojekyll`, and any `release-<cargo target>.tar.gz` archives.
+Build `docs/` with `./build-docs.sh`, not by running `mdbook build` directly. mdBook overwrites `docs/` on every build, so `build-docs.sh` must copy every non-mdBook artifact needed by the published site after each build, including `bootstrap.sh`, `bootstrap.bat`, `bootstrap.ps1`, `.nojekyll`, and any `release-<cargo target>.tar.gz` archives.
 
 Each tarball contains only `LICENSE-APACHE`, `LICENSE-MPL`, `ssh-obi`, and `ssh-obi-server`, except client-only targets where `ssh-obi-server` is omitted. Platform executable suffixes are kept, so the Windows client-only tarball contains `ssh-obi.exe`.
 
-Build release archives with `./build-release.sh`. It builds every listed target with cross-rs, stages only the license files plus the target binaries, and creates the corresponding `release-<cargo target>.tar.gz` files with `tar` piped through `gzip`. `build-docs.sh` then copies those tarballs into `docs/` on every mdBook build.
+Build release archives with `./build-release.sh`. It builds x86_64/aarch64 Linux, FreeBSD, illumos, and Windows targets with cross-rs. It builds Darwin, NetBSD, riscv64 Linux musl, and powerpc64le Linux musl targets with `cargo-zigbuild` plus `zig`: Darwin avoids custom cross images, NetBSD avoids the cross-rs image's missing target `libexecinfo`, and riscv64/powerpc64le Linux musl avoid targets with no published cross-rs Docker image. The script installs the Rust std components needed by zigbuild targets with `rustup target add`, stages only the license files plus the target binaries, and creates the corresponding `release-<cargo target>.tar.gz` files with `tar` piped through `gzip`. Each target is built with its own Cargo target directory under `target/release-build/` so host-side build-script executables are not shared across build environments with different libc baselines. When `SDKROOT` is set to an absolute path for Darwin builds, the script passes it to `cargo-zigbuild` as a path relative to the repository root; this avoids Zig 0.14 treating `-L$SDKROOT/usr/lib` as relative to `--sysroot` and looking under `$SDKROOT/$SDKROOT/usr/lib`. `build-docs.sh` then copies those tarballs into `docs/` on every mdBook build.
 
 - `release-x86_64-unknown-linux-musl.tar.gz`
 - `release-x86_64-unknown-freebsd.tar.gz`
@@ -252,7 +268,7 @@ Build release archives with `./build-release.sh`. It builds every listed target 
 
 - `release-x86_64-pc-windows-gnu.tar.gz` (client only)
 
-Rust/cross-rs limitations. No other targets can be added at this stage.
+Rust/toolchain limitations. No other targets can be added at this stage.
 
 ## License
 
