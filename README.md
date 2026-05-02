@@ -144,6 +144,14 @@ Bootstrap behavior on the remote:
 
 Bootstrap output uses the `OBI-` line prefix so motd/rc-file noise can't be mistaken for protocol. Strict line discipline: only `OBI-` marker lines may be written to stdout before the bootstrap `exec`s the server. The client must not write framed protocol bytes until `OBI-SERVER-READY` is observed and the server has taken over stdio. `bootstrap.sh` is `include_str!`'d into the client at build time — single source of truth.
 
+The bootstrap also supports install-only mode for users who want to prepare a remote manually without starting a server:
+
+```sh
+wget -O - https://obi.menhera.org/bootstrap.sh | sh -s -- --install
+```
+
+The `sh -s -- --install` form is intentional: `-s` tells a POSIX shell to read the script from stdin, and `--` ends shell option parsing before passing `--install` to the script. Do not use `sh - -- --install`; portable `/bin/sh` implementations treat the first `--` as a script filename, not as "read from stdin." In install-only mode, the script skips the interactive `OBI-INSTALL-REQUIRED` confirmation, installs or verifies `~/.ssh-obi/bin/ssh-obi-server`, prints `OBI-INSTALL-COMPLETE`, and exits without execing the server.
+
 ## Cargo.toml (skeleton)
 
 ```toml
@@ -200,11 +208,13 @@ These are settled — please don't relitigate without discussion:
 - **Shell exit terminates the session.** When the daemon's child shell exits (any cause: normal `exit`, `kill`, OOM, SIGSEGV), the daemon catches SIGCHLD, forwards the exit code and signal info through to any attached broker so the client can mirror them, unlinks its socket, and exits. The session is gone — next `ssh-obi user@host` will not see it in the picker.
 - **Socket location: `/tmp/ssh-obi-<uid>/<session-id>.sock`.** Per-user subdir created with mode 0700, ownership-checked on reuse. Stale sockets handled via `connect()`-then-`unlink()`-on-`ECONNREFUSED`. Refuses to start on NFS/CIFS/SMB. Validates path length under 100 bytes (macOS/BSD `sun_path` cap is 104).
 - **Wire protocol is forward-compatible by capability negotiation,** not version bumping. Once a capability ships, its message format is frozen forever. The only on-wire version number is `--protocol-check`, which gates binary compatibility of the framing/handshake layer.
-- **Auto-install over a single SSH invocation** via embedded `bootstrap.sh` piped on stdin. One auth round-trip total, even on first-ever connect to a remote. The client waits for the bootstrap marker before sending protocol bytes. Bootstrap writes shell rc files reachable from non-interactive SSH (`~/.bashrc`, `~/.zshenv`, fish `conf.d`), not login-only files.
+- **Auto-install over a single SSH invocation** via embedded `bootstrap.sh` passed as the remote command body. One auth round-trip total, even on first-ever connect to a remote. SSH stdin stays available for install confirmation and then the broker protocol. The client waits for the bootstrap marker before sending protocol bytes. Bootstrap writes shell rc files reachable from non-interactive SSH (`~/.bashrc`, `~/.zshenv`, fish `conf.d`), not login-only files.
 
 ## mdBook-based obi.menhera.org site
 
 `docs/` hosts a mdBook-generated documentation website and it is not `.gitignore`-d. It is to be served by GitHub pages. It is to contain `cross-rs`-compiled tarballs, named like `release-<cargo target>.tar.gz` ('release' is literal, not a version). The release archive is unpacked using a maximally-portable set of commands. No GNUism, no BSDism, etc. Signature verification is skipped for MVP, trusting HTTPS. It will be located at `https://obi.menhera.org/`.
+
+Build `docs/` with `./build-docs.sh`, not by running `mdbook build` directly. mdBook overwrites `docs/` on every build, so `build-docs.sh` must copy every non-mdBook artifact needed by the published site after each build, including `bootstrap.sh`, `.nojekyll`, and any `release-<cargo target>.tar.gz` archives.
 
 Each tarball contains only `LICENSE-APACHE`, `LICENSE-MPL`, `ssh-obi`, and `ssh-obi-server`, except client-only targets where `ssh-obi-server` is omitted.
 

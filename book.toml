@@ -6,3 +6,6 @@ src = "docs-src"
 
 [build]
 build-dir = "docs"
+
+[output.html]
+cname = "obi.menhera.org"
