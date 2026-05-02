@@ -13,6 +13,14 @@ where
 #[cfg(windows)]
 #[derive(Debug)]
 pub struct RawModeGuard {
+    input_handle: windows_sys::Win32::Foundation::HANDLE,
+    input_original: u32,
+    output_mode: Option<WindowsConsoleMode>,
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct WindowsConsoleMode {
     handle: windows_sys::Win32::Foundation::HANDLE,
     original: u32,
 }
@@ -64,36 +72,72 @@ impl RawModeGuard {
     pub fn enable() -> Result<Option<Self>, TerminalError> {
         use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::System::Console::{
-            ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, GetConsoleMode,
-            GetStdHandle, STD_INPUT_HANDLE, SetConsoleMode,
+            ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode,
+            GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
         };
 
-        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        let input_handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        if input_handle.is_null() || input_handle == INVALID_HANDLE_VALUE {
             return Ok(None);
         }
 
-        let mut original = 0;
-        if unsafe { GetConsoleMode(handle, &mut original) } == 0 {
+        let mut input_original = 0;
+        if unsafe { GetConsoleMode(input_handle, &mut input_original) } == 0 {
             return Ok(None);
         }
 
-        let raw = original & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
-        if unsafe { SetConsoleMode(handle, raw) } == 0 {
+        let raw = (input_original
+            & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT))
+            | ENABLE_VIRTUAL_TERMINAL_INPUT;
+        if unsafe { SetConsoleMode(input_handle, raw) } == 0 {
             return Err(TerminalError::SetConsoleMode(
                 std::io::Error::last_os_error(),
             ));
         }
 
-        Ok(Some(Self { handle, original }))
+        let output_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        let mut output_original = 0;
+        let output_mode = if output_handle.is_null()
+            || output_handle == INVALID_HANDLE_VALUE
+            || unsafe { GetConsoleMode(output_handle, &mut output_original) } == 0
+        {
+            None
+        } else {
+            let output_raw = output_original | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            if unsafe { SetConsoleMode(output_handle, output_raw) } == 0 {
+                let _ = unsafe { SetConsoleMode(input_handle, input_original) };
+                return Err(TerminalError::SetConsoleMode(
+                    std::io::Error::last_os_error(),
+                ));
+            }
+            Some(WindowsConsoleMode {
+                handle: output_handle,
+                original: output_original,
+            })
+        };
+
+        Ok(Some(Self {
+            input_handle,
+            input_original,
+            output_mode,
+        }))
     }
 }
 
 #[cfg(windows)]
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
+        if let Some(output) = &self.output_mode {
+            let _ = unsafe {
+                windows_sys::Win32::System::Console::SetConsoleMode(output.handle, output.original)
+            };
+        }
         let _ = unsafe {
-            windows_sys::Win32::System::Console::SetConsoleMode(self.handle, self.original)
+            windows_sys::Win32::System::Console::SetConsoleMode(
+                self.input_handle,
+                self.input_original,
+            )
         };
     }
 }
