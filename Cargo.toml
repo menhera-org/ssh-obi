@@ -11,6 +11,10 @@ keywords = ["ssh", "terminal", "pty", "reconnect", "tmux"]
 categories = ["command-line-utilities", "network-programming"]
 description = "Lightweight per-user terminal multiplexer with auto-reconnecting sessions tunneled over plain SSH — preserves the local terminal's native scrollback (unlike mosh) and requires no system-wide daemon (unlike Eternal Terminal)."
 autobins = false
+exclude = [
+    "docs/",
+    "*.tar.gz",
+]
 
 [features]
 default = []
