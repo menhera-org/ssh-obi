@@ -449,6 +449,7 @@ name = "ssh-obi"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "cc",
  "chrono",
  "ciborium",
  "clap",

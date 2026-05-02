@@ -32,6 +32,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 
+[build-dependencies]
+cc = "1"
+
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["term", "signal", "process", "fs", "user"] }
 

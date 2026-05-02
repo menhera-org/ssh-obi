@@ -15,13 +15,13 @@ default_cross_server_targets='
 x86_64-unknown-linux-musl
 x86_64-unknown-freebsd
 x86_64-unknown-illumos
+x86_64-unknown-netbsd
 aarch64-unknown-linux-musl
 '
 
 default_zigbuild_server_targets='
 x86_64-apple-darwin
 aarch64-apple-darwin
-x86_64-unknown-netbsd
 riscv64gc-unknown-linux-musl
 powerpc64le-unknown-linux-musl
 '
@@ -109,6 +109,13 @@ run_zigbuild() {
     "$zigbuild_bin" zigbuild --target-dir "$cargo_target_dir" --release --target "$target" --features server-bin --bins
 }
 
+run_zigbuild_client() {
+    target="$1"
+    cargo_target_dir="$2"
+
+    "$zigbuild_bin" zigbuild --target-dir "$cargo_target_dir" --release --target "$target" --bin ssh-obi
+}
+
 # Cargo host artifacts, including build-script executables, are not portable
 # across cross images with different glibc baselines. Keep a separate target
 # directory per release target so each image executes the build scripts it built.
@@ -164,6 +171,14 @@ for target in $client_only_targets; do
     esac
 
     cargo_target_dir="${project_dir}/${target_root}/${target}"
-    "$cross_bin" build --target-dir "$cargo_target_dir" --release --target "$target" --bin ssh-obi
+    case "$target" in
+        *windows*)
+            ensure_rust_target "$target"
+            run_zigbuild_client "$target" "$cargo_target_dir"
+            ;;
+        *)
+            "$cross_bin" build --target-dir "$cargo_target_dir" --release --target "$target" --bin ssh-obi
+            ;;
+    esac
     archive_target "$target" "$exe_suffix" 0 "$cargo_target_dir"
 done
