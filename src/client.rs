@@ -415,10 +415,12 @@ fn read_stdin_events(sender: Sender<AttachedEvent>) {
                 return;
             }
             Ok(n) => {
-                if sender
-                    .send(AttachedEvent::Stdin(buf[..n].to_vec()))
-                    .is_err()
-                {
+                let mut bytes = buf[..n].to_vec();
+                if let Err(err) = append_pending_stdin_bytes(&mut stdin, &mut bytes) {
+                    let _ = sender.send(AttachedEvent::StdinError(err));
+                    return;
+                }
+                if sender.send(AttachedEvent::Stdin(bytes)).is_err() {
                     return;
                 }
             }
@@ -429,6 +431,57 @@ fn read_stdin_events(sender: Sender<AttachedEvent>) {
             }
         }
     }
+}
+
+#[cfg(unix)]
+fn append_pending_stdin_bytes<R>(stdin: &mut R, bytes: &mut Vec<u8>) -> io::Result<()>
+where
+    R: Read + std::os::fd::AsRawFd,
+{
+    const COALESCE_TIMEOUT_MS: i32 = 2;
+    const MAX_BATCH: usize = 64 * 1024;
+
+    let fd = stdin.as_raw_fd();
+    let mut buf = [0u8; 8192];
+
+    while bytes.len() < MAX_BATCH {
+        let mut pollfd = nix::libc::pollfd {
+            fd,
+            events: nix::libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { nix::libc::poll(&mut pollfd, 1, COALESCE_TIMEOUT_MS) };
+        if ready == 0 {
+            break;
+        }
+        if ready < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+        if pollfd.revents & nix::libc::POLLIN == 0 {
+            break;
+        }
+
+        match stdin.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => bytes.extend_from_slice(&buf[..n]),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn append_pending_stdin_bytes<R>(_stdin: &mut R, _bytes: &mut Vec<u8>) -> io::Result<()>
+where
+    R: Read,
+{
+    Ok(())
 }
 
 fn run_attached_session<R, W>(
