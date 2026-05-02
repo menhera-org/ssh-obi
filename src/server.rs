@@ -1,9 +1,16 @@
 use std::env;
 use std::fmt;
+use std::io::{Read, Write};
 use std::path::Path;
 
-use crate::protocol::{DaemonInfo, DaemonInfoRequest, DetachRequest, MessageType, ProtocolError};
-use crate::session::{SocketPathError, list_session_socket_ids, remove_stale_socket, socket_path};
+use crate::protocol::{
+    DaemonInfo, DaemonInfoRequest, DetachRequest, DetachSessionRequest, ErrorMessage, MessageType,
+    ProtocolError, SessionList,
+};
+use crate::session::{
+    SocketPathError, list_session_socket_ids, remove_stale_socket, socket_dir_for_uid, socket_path,
+    socket_path_for_uid,
+};
 use crate::transport::{FramedReader, FramedWriter};
 
 pub const ENV_SESSION: &str = "SSH_OBI_SESSION";
@@ -12,6 +19,49 @@ pub const ENV_SOCKET: &str = "SSH_OBI_SOCKET";
 pub fn detach_from_env() -> Result<(), ServerError> {
     let socket = env::var(ENV_SOCKET).map_err(|_| ServerError::MissingEnvironment(ENV_SOCKET))?;
     detach_via_socket(socket)
+}
+
+pub fn run_broker_stdio() -> Result<(), ServerError> {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    handle_broker_request(stdin.lock(), stdout.lock(), current_uid())
+}
+
+pub fn handle_broker_request<R, W>(reader: R, writer: W, uid: u32) -> Result<(), ServerError>
+where
+    R: Read,
+    W: Write,
+{
+    let mut reader = FramedReader::new(reader);
+    let mut writer = FramedWriter::new(writer);
+    let frame = reader.read_frame()?.ok_or(ServerError::NoBrokerRequest)?;
+
+    if frame.msg_type() == MessageType::SESSION_LIST_REQUEST {
+        let socket_dir = socket_dir_for_uid(uid);
+        let sessions = enumerate_daemons(socket_dir)?
+            .into_iter()
+            .map(|info| info.session)
+            .collect();
+        writer.write_body(MessageType::SESSION_LIST, 0, &SessionList { sessions })?;
+        writer.flush()?;
+        return Ok(());
+    }
+
+    if frame.msg_type() == MessageType::DETACH {
+        let request: DetachSessionRequest = frame.decode_body()?;
+        let path = socket_path_for_uid(uid, &request.session_id)?;
+        detach_via_socket(path)?;
+        return Ok(());
+    }
+
+    let message = format!("unsupported broker request type {}", frame.msg_type().get());
+    writer.write_body(MessageType::ERROR, 0, &ErrorMessage { message })?;
+    writer.flush()?;
+    Err(ServerError::UnexpectedMessage(frame.msg_type().get()))
+}
+
+fn current_uid() -> u32 {
+    nix::unistd::Uid::current().as_raw()
 }
 
 #[cfg(unix)]
@@ -99,6 +149,7 @@ pub enum ServerError {
     MissingEnvironment(&'static str),
     Connect(std::io::Error),
     Protocol(ProtocolError),
+    NoBrokerRequest,
     UnexpectedDaemonEof,
     UnexpectedMessage(u8),
     UnsupportedPlatform(&'static str),
@@ -111,6 +162,7 @@ impl fmt::Display for ServerError {
             Self::MissingEnvironment(name) => write!(f, "{name} is not set"),
             Self::Connect(err) => write!(f, "failed to connect to daemon socket: {err}"),
             Self::Protocol(err) => write!(f, "failed to send control request: {err}"),
+            Self::NoBrokerRequest => write!(f, "broker received no request"),
             Self::UnexpectedDaemonEof => write!(f, "daemon closed connection without a response"),
             Self::UnexpectedMessage(msg_type) => {
                 write!(f, "daemon returned unexpected message type {msg_type}")
@@ -147,8 +199,9 @@ impl From<SocketPathError> for ServerError {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::protocol::{DetachRequest, SessionRecord, UnixTimeMillis};
+    use crate::protocol::{DetachRequest, SessionListRequest, SessionRecord, UnixTimeMillis};
     use std::fs;
+    use std::io::Cursor;
     use std::os::unix::net::UnixListener;
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -217,6 +270,26 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
 
         assert!(enumerate_daemons(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn broker_list_request_returns_session_list() {
+        let mut request = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut request);
+            writer
+                .write_body(MessageType::SESSION_LIST_REQUEST, 0, &SessionListRequest)
+                .unwrap();
+        }
+
+        let mut response = Vec::new();
+        handle_broker_request(Cursor::new(request), &mut response, 4_294_967_295).unwrap();
+
+        let mut reader = FramedReader::new(response.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::SESSION_LIST);
+        let list: SessionList = frame.decode_body().unwrap();
+        assert!(list.sessions.is_empty());
     }
 
     fn test_listener(name: &str) -> Option<(UnixListener, std::path::PathBuf)> {

@@ -6,9 +6,18 @@ use std::thread;
 use crate::bootstrap::{
     INSTALL_OK_MARKER, INSTALL_REQUIRED_MARKER, READY_MARKER, remote_shell_command,
 };
-use crate::cli::ClientArgs;
+use crate::cli::{ClientAction, ClientArgs};
+use crate::protocol::{
+    DetachSessionRequest, MessageType, ProtocolError, SessionList, SessionListRequest,
+};
+use crate::session::{SessionIdError, SessionInfo, render_session_table};
+use crate::transport::{FramedReader, FramedWriter};
 
 pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
+    if matches!(args.action, ClientAction::Attach | ClientAction::New) {
+        return Err(ClientRunError::ActionNotImplemented(args.action));
+    }
+
     let server_args = server_args_for_action(args);
     let remote_command = remote_shell_command(&server_args);
     let ssh_args = args.ssh_command_args(&remote_command);
@@ -32,6 +41,19 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
 
     wait_for_bootstrap(&mut child_stdout, &mut child_stdin)?;
 
+    if let Some(code) = handle_control_action(args, &mut child_stdout, &mut child_stdin)? {
+        let status = child.wait().map_err(ClientRunError::WaitSsh)?;
+        return Ok(if status.success() {
+            code
+        } else {
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .map(ExitCode::from)
+                .unwrap_or(ExitCode::from(1))
+        });
+    }
+
     let stdout_thread = thread::spawn(move || -> io::Result<()> {
         let mut stdout = io::stdout().lock();
         io::copy(&mut child_stdout, &mut stdout)?;
@@ -53,6 +75,59 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
 
 pub fn server_args_for_action(_args: &ClientArgs) -> Vec<&str> {
     Vec::new()
+}
+
+fn handle_control_action<R, W>(
+    args: &ClientArgs,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<Option<ExitCode>, ClientRunError>
+where
+    R: Read,
+    W: Write,
+{
+    match args.action {
+        ClientAction::List => {
+            let mut framed_writer = FramedWriter::new(writer);
+            framed_writer.write_body(MessageType::SESSION_LIST_REQUEST, 0, &SessionListRequest)?;
+            framed_writer.flush()?;
+
+            let mut framed_reader = FramedReader::new(reader);
+            let frame = framed_reader
+                .read_frame()?
+                .ok_or(ClientRunError::UnexpectedBrokerEof)?;
+
+            if frame.msg_type() != MessageType::SESSION_LIST {
+                return Err(ClientRunError::UnexpectedBrokerMessage(
+                    frame.msg_type().get(),
+                ));
+            }
+
+            let list: SessionList = frame.decode_body()?;
+            let sessions = list
+                .sessions
+                .into_iter()
+                .map(SessionInfo::from_record)
+                .collect::<Result<Vec<_>, _>>()?;
+            print!("{}", render_session_table(&sessions, false));
+            Ok(Some(ExitCode::SUCCESS))
+        }
+        ClientAction::Detach => {
+            let session_id = args
+                .session
+                .clone()
+                .ok_or(ClientRunError::MissingSessionForDetach)?;
+            let mut framed_writer = FramedWriter::new(writer);
+            framed_writer.write_body(
+                MessageType::DETACH,
+                0,
+                &DetachSessionRequest { session_id },
+            )?;
+            framed_writer.flush()?;
+            Ok(Some(ExitCode::SUCCESS))
+        }
+        ClientAction::Attach | ClientAction::New => Ok(None),
+    }
 }
 
 fn wait_for_bootstrap<R, W>(reader: &mut R, writer: &mut W) -> Result<(), ClientRunError>
@@ -135,6 +210,12 @@ pub enum ClientRunError {
     Prompt(io::Error),
     InstallDeclined,
     RemoteBootstrap(String),
+    UnexpectedBrokerEof,
+    UnexpectedBrokerMessage(u8),
+    Protocol(ProtocolError),
+    InvalidSession(SessionIdError),
+    MissingSessionForDetach,
+    ActionNotImplemented(ClientAction),
     WaitSsh(io::Error),
     CopyStdout(io::Error),
     StdoutThreadPanicked,
@@ -154,6 +235,22 @@ impl fmt::Display for ClientRunError {
             Self::Prompt(err) => write!(f, "failed to read install confirmation: {err}"),
             Self::InstallDeclined => write!(f, "install declined"),
             Self::RemoteBootstrap(message) => write!(f, "remote bootstrap failed: {message}"),
+            Self::UnexpectedBrokerEof => write!(f, "broker ended before sending a response"),
+            Self::UnexpectedBrokerMessage(msg_type) => {
+                write!(f, "broker returned unexpected message type {msg_type}")
+            }
+            Self::Protocol(err) => write!(f, "protocol error: {err}"),
+            Self::InvalidSession(err) => write!(f, "invalid session from broker: {err}"),
+            Self::MissingSessionForDetach => write!(f, "--detach requires --session ID"),
+            Self::ActionNotImplemented(action) => {
+                let action = match action {
+                    ClientAction::Attach => "attach",
+                    ClientAction::New => "new session",
+                    ClientAction::List => "list",
+                    ClientAction::Detach => "detach",
+                };
+                write!(f, "{action} is not implemented yet")
+            }
             Self::WaitSsh(err) => write!(f, "failed to wait for ssh: {err}"),
             Self::CopyStdout(err) => write!(f, "failed to copy ssh stdout: {err}"),
             Self::StdoutThreadPanicked => write!(f, "stdout copy thread panicked"),
@@ -170,8 +267,22 @@ impl std::error::Error for ClientRunError {
             | Self::Prompt(err)
             | Self::WaitSsh(err)
             | Self::CopyStdout(err) => Some(err),
+            Self::Protocol(err) => Some(err),
+            Self::InvalidSession(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+impl From<ProtocolError> for ClientRunError {
+    fn from(value: ProtocolError) -> Self {
+        Self::Protocol(value)
+    }
+}
+
+impl From<SessionIdError> for ClientRunError {
+    fn from(value: SessionIdError) -> Self {
+        Self::InvalidSession(value)
     }
 }
 
@@ -201,9 +312,48 @@ mod tests {
     }
 
     #[test]
+    fn attach_action_fails_fast_until_attach_is_implemented() {
+        let err = run_client(&args(ClientAction::Attach)).unwrap_err();
+        assert!(matches!(
+            err,
+            ClientRunError::ActionNotImplemented(ClientAction::Attach)
+        ));
+    }
+
+    #[test]
     fn line_reader_does_not_require_utf8() {
         let mut bytes = &b"OBI-\xff\n"[..];
         let line = read_line_lossy(&mut bytes).unwrap().unwrap();
         assert_eq!(line, "OBI-\u{fffd}\n");
+    }
+
+    #[test]
+    fn list_action_writes_request_and_prints_response() {
+        let mut input = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut input);
+            writer
+                .write_body(
+                    MessageType::SESSION_LIST,
+                    0,
+                    &SessionList {
+                        sessions: Vec::new(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let mut output = Vec::new();
+        let code = handle_control_action(
+            &args(ClientAction::List),
+            &mut input.as_slice(),
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(code, Some(ExitCode::SUCCESS));
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::SESSION_LIST_REQUEST);
     }
 }

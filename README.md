@@ -2,6 +2,8 @@
 
 > Lightweight per-user terminal multiplexer with auto-reconnecting sessions tunneled over plain SSH — preserves the local terminal's native scrollback (unlike mosh) and requires no system-wide daemon (unlike Eternal Terminal).
 
+The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
+
 **Status:** early development. CLI, wire protocol, and library APIs are unstable until `0.1.0`.
 
 ## What it is

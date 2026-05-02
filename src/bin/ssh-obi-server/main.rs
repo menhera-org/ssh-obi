@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use ssh_obi::protocol::supports_protocol_baseline;
-use ssh_obi::server::detach_from_env;
+use ssh_obi::server::{detach_from_env, run_broker_stdio};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -41,6 +41,9 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    eprintln!("ssh-obi-server: broker mode is not implemented yet");
-    ExitCode::from(70)
+    if let Err(err) = run_broker_stdio() {
+        eprintln!("ssh-obi-server: broker failed: {err}");
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
 }

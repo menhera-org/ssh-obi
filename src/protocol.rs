@@ -243,6 +243,11 @@ impl<'de> Deserialize<'de> for UnixTimeMillis {
 pub struct SessionListRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachSessionRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionList {
     pub sessions: Vec<SessionRecord>,
 }
