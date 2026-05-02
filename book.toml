@@ -1,0 +1,8 @@
+[book]
+title = "ssh-obi documentation"
+authors = ["metastable-void"]
+language = "en"
+src = "docs-src"
+
+[build]
+build-dir = "docs"

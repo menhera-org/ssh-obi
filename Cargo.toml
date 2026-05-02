@@ -12,5 +12,6 @@ categories = ["command-line-utilities", "network-programming"]
 description = "Lightweight per-user terminal multiplexer with auto-reconnecting sessions tunneled over plain SSH — preserves the local terminal's native scrollback (unlike mosh) and requires no system-wide daemon (unlike Eternal Terminal)."
 
 [dependencies]
-clap = { version = "4", registry = "menhera-cooldown", features = ["derive"] }
-nix = { version = "0.31", registry = "menhera-cooldown", features = ["term", "signal", "process", "fs"] }
+clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+nix = { version = "0.31", features = ["term", "signal", "process", "fs"] }
