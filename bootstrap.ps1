@@ -60,9 +60,20 @@ try {
     Copy-Item -LiteralPath $extractedClient -Destination $client -Force
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $normalizedBinDir = $binDir.TrimEnd("\")
+    $pathHasBinDir = $false
+    if (-not [string]::IsNullOrEmpty($userPath)) {
+        foreach ($entry in ($userPath -split ";")) {
+            if ($entry.TrimEnd("\") -ieq $normalizedBinDir) {
+                $pathHasBinDir = $true
+                break
+            }
+        }
+    }
+
     if ([string]::IsNullOrEmpty($userPath)) {
         [Environment]::SetEnvironmentVariable("Path", $binDir, "User")
-    } elseif (($userPath -split ";") -notcontains $binDir) {
+    } elseif (-not $pathHasBinDir) {
         [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(";") + ";" + $binDir), "User")
     }
 

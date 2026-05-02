@@ -134,6 +134,8 @@ mod runtime {
 
         let shell = shell_to_spawn();
         let shell_argv0 = login_shell_argv0(&shell);
+        let home = home_to_spawn();
+        let term = term_to_spawn();
         let pty = spawn_pty_command(
             &shell,
             Some(&shell_argv0),
@@ -141,7 +143,11 @@ mod runtime {
             &[
                 (ENV_SESSION, session_id.as_str()),
                 (ENV_SOCKET, socket_path.to_string_lossy().as_ref()),
+                ("HOME", &home),
+                ("PWD", &home),
+                ("TERM", &term),
             ],
+            Some(&home),
             None,
         )?;
         let master_write = nix::unistd::dup(pty.master.as_fd()).map_err(DaemonError::DupPty)?;
@@ -490,6 +496,34 @@ mod runtime {
         }
     }
 
+    fn home_to_spawn() -> String {
+        if let Ok(home) = std::env::var("HOME")
+            && is_directory(&home)
+        {
+            return home;
+        }
+
+        match nix::unistd::User::from_uid(nix::unistd::Uid::current()) {
+            Ok(Some(user)) if user.dir.is_dir() => user.dir.to_string_lossy().into_owned(),
+            _ => "/".to_string(),
+        }
+    }
+
+    fn is_directory(path: &str) -> bool {
+        !path.is_empty() && PathBuf::from(path).is_dir()
+    }
+
+    fn term_to_spawn() -> String {
+        term_to_spawn_from(std::env::var("TERM").ok().as_deref())
+    }
+
+    fn term_to_spawn_from(term: Option<&str>) -> String {
+        match term {
+            Some(term) if !term.is_empty() && term != "dumb" => term.to_string(),
+            _ => "xterm-256color".to_string(),
+        }
+    }
+
     fn login_shell_argv0(shell: &str) -> String {
         let shell_path = PathBuf::from(shell);
         let name = shell_path
@@ -671,6 +705,17 @@ mod runtime {
         #[test]
         fn login_shell_argv0_falls_back_for_empty_basename() {
             assert_eq!(login_shell_argv0("/"), "-sh");
+        }
+
+        #[test]
+        fn term_to_spawn_rejects_dumb() {
+            assert_eq!(term_to_spawn_from(None), "xterm-256color");
+            assert_eq!(term_to_spawn_from(Some("")), "xterm-256color");
+            assert_eq!(term_to_spawn_from(Some("dumb")), "xterm-256color");
+            assert_eq!(
+                term_to_spawn_from(Some("screen-256color")),
+                "screen-256color"
+            );
         }
     }
 }

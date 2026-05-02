@@ -38,6 +38,9 @@ The Unix installer:
 The bootstrap does not edit `~/.bash_profile`, because `ssh-obi` needs paths
 available to non-interactive remote commands.
 
+You can run the installer repeatedly to update the installed binaries. It will
+not add duplicate `ssh-obi` PATH entries to shell startup files.
+
 ## Install During Connect
 
 Most users do not need to run the Unix bootstrap manually. The local client
@@ -78,6 +81,10 @@ Both Windows bootstraps:
 
 Restart the terminal if `ssh-obi.exe` is not found immediately after PATH
 updates.
+
+You can run either Windows bootstrap repeatedly to update `ssh-obi.exe`. The
+installer only adds the install directory to the user PATH when it is not
+already present.
 
 ## Manual Install From A Tarball
 

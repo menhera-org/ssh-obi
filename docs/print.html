@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-743bc165.js";
+            window.path_to_searchindex_js = "searchindex-3236a50a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6266f562.js"></script>
@@ -309,6 +309,8 @@ first <code>--</code> as a script filename, not as “read from stdin”.</p>
 </ol>
 <p>The bootstrap does not edit <code>~/.bash_profile</code>, because <code>ssh-obi</code> needs paths
 available to non-interactive remote commands.</p>
+<p>You can run the installer repeatedly to update the installed binaries. It will
+not add duplicate <code>ssh-obi</code> PATH entries to shell startup files.</p>
 <h2 id="install-during-connect"><a class="header" href="#install-during-connect">Install During Connect</a></h2>
 <p>Most users do not need to run the Unix bootstrap manually. The local client
 handles the remote check during normal connection:</p>
@@ -336,6 +338,9 @@ batch file, then run it:</p>
 </ul>
 <p>Restart the terminal if <code>ssh-obi.exe</code> is not found immediately after PATH
 updates.</p>
+<p>You can run either Windows bootstrap repeatedly to update <code>ssh-obi.exe</code>. The
+installer only adds the install directory to the user PATH when it is not
+already present.</p>
 <h2 id="manual-install-from-a-tarball"><a class="header" href="#manual-install-from-a-tarball">Manual Install From A Tarball</a></h2>
 <p>Manual install is also possible:</p>
 <pre><code class="language-sh">mkdir -p "$HOME/.ssh-obi/bin"
@@ -436,6 +441,9 @@ available.</p>
 <p>New sessions start the remote user’s shell as a login shell, using the usual
 leading-dash argv[0] convention such as <code>-bash</code> or <code>-zsh</code>. This lets shell
 startup behavior match interactive SSH more closely.</p>
+<p>New sessions also start in the remote user’s home directory. <code>TERM</code> is
+forwarded from the local client when it is useful; if it is missing or <code>dumb</code>,
+<code>ssh-obi</code> uses <code>xterm-256color</code>.</p>
 <h2 id="busy-sessions"><a class="header" href="#busy-sessions">Busy Sessions</a></h2>
 <p>A session can have only one attached client. If another client is already
 attached, the session is busy.</p>

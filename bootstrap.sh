@@ -3,6 +3,7 @@ set -eu
 
 want="0.1"
 install_only=0
+term="${TERM:-xterm-256color}"
 
 if [ "$#" -gt 0 ] && [ "$1" = "--" ]; then
     shift
@@ -23,18 +24,27 @@ if [ "$#" -gt 0 ] && [ "$1" = "--install" ]; then
     shift
 fi
 
+if [ "$#" -gt 1 ] && [ "$1" = "--term" ]; then
+    term="$2"
+    shift 2
+fi
+
+if [ "$term" = "" ] || [ "$term" = "dumb" ]; then
+    term="xterm-256color"
+fi
+TERM="$term"
+export TERM
+
 install_root="${HOME}/.ssh-obi"
 bin_dir="${install_root}/bin"
 server="${bin_dir}/ssh-obi-server"
 base_url="https://obi.menhera.org"
 
 if [ -x "$server" ] && "$server" --protocol-check "$want" >/dev/null 2>&1; then
-    if [ "$install_only" -eq 1 ]; then
-        printf '%s\n' 'OBI-INSTALL-COMPLETE'
-        exit 0
+    if [ "$install_only" -eq 0 ]; then
+        printf '%s\n' 'OBI-SERVER-READY'
+        exec "$server" "$@"
     fi
-    printf '%s\n' 'OBI-SERVER-READY'
-    exec "$server" "$@"
 fi
 
 if [ "$install_only" -eq 0 ]; then

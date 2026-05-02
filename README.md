@@ -148,13 +148,13 @@ Bootstrap behavior on the remote:
 
 Bootstrap output uses the `OBI-` line prefix so motd/rc-file noise can't be mistaken for protocol. Strict line discipline: only `OBI-` marker lines may be written to stdout before the bootstrap `exec`s the server. The client must not write framed protocol bytes until `OBI-SERVER-READY` is observed and the server has taken over stdio. `bootstrap.sh` is `include_str!`'d into the client at build time — single source of truth.
 
-The bootstrap also supports install-only mode for users who want to prepare a remote manually without starting a server:
+The bootstrap also supports install-only mode for users who want to prepare or update a remote manually without starting a server:
 
 ```sh
 wget -O - https://obi.menhera.org/bootstrap.sh | sh -s -- --install
 ```
 
-The `sh -s -- --install` form is intentional: `-s` tells a POSIX shell to read the script from stdin, and `--` ends shell option parsing before passing `--install` to the script. Do not use `sh - -- --install`; portable `/bin/sh` implementations treat the first `--` as a script filename, not as "read from stdin." In install-only mode, the script skips the interactive `OBI-INSTALL-REQUIRED` confirmation, installs or verifies `~/.ssh-obi/bin/ssh-obi-server`, prints `OBI-INSTALL-COMPLETE`, and exits without execing the server.
+The `sh -s -- --install` form is intentional: `-s` tells a POSIX shell to read the script from stdin, and `--` ends shell option parsing before passing `--install` to the script. Do not use `sh - -- --install`; portable `/bin/sh` implementations treat the first `--` as a script filename, not as "read from stdin." In install-only mode, the script skips the interactive `OBI-INSTALL-REQUIRED` confirmation, installs or updates `~/.ssh-obi/bin/ssh-obi-server`, prints `OBI-INSTALL-COMPLETE`, and exits without execing the server. It can be run repeatedly without adding duplicate shell startup entries.
 
 Windows has separate client-only bootstraps because Windows is not a supported server platform. PowerShell is preferred:
 

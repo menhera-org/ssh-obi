@@ -33,6 +33,7 @@ pub fn spawn_pty_command(
     argv0: Option<&str>,
     args: &[&str],
     env_overrides: &[(&str, &str)],
+    cwd: Option<&str>,
     size: Option<WindowSize>,
 ) -> Result<PtyChild, PtyError> {
     use std::ffi::CString;
@@ -61,6 +62,9 @@ pub fn spawn_pty_command(
             CString::new(*value).map_err(|_| PtyError::NulByte("environment"))?,
         ));
     }
+    let cwd = cwd
+        .map(|cwd| CString::new(cwd).map_err(|_| PtyError::NulByte("cwd")))
+        .transpose()?;
 
     let winsize = size.map(to_nix_winsize);
     // SAFETY: forkpty is called before this function starts any threads. The child branch only
@@ -69,6 +73,13 @@ pub fn spawn_pty_command(
     match unsafe { nix::pty::forkpty(winsize.as_ref(), None) }.map_err(PtyError::Fork)? {
         ForkptyResult::Parent { child, master } => Ok(PtyChild { master, child }),
         ForkptyResult::Child => {
+            if let Some(cwd) = &cwd
+                && unsafe { nix::libc::chdir(cwd.as_ptr()) } != 0
+            {
+                // SAFETY: We are in the post-fork child and cannot recover from chdir failure
+                // before exec.
+                unsafe { nix::libc::_exit(127) };
+            }
             for (name, value) in &env {
                 if unsafe { nix::libc::setenv(name.as_ptr(), value.as_ptr(), 1) } != 0 {
                     // SAFETY: We are in the post-fork child and cannot recover from environment
@@ -240,6 +251,7 @@ mod tests {
             None,
             &["-c", "printf '%s' \"$SSH_OBI_TEST_VALUE\""],
             &[("SSH_OBI_TEST_VALUE", "pty-ok")],
+            None,
             Some(WindowSize {
                 rows: 24,
                 cols: 80,
@@ -265,6 +277,52 @@ mod tests {
 
         assert!(
             output.windows(6).any(|w| w == b"pty-ok"),
+            "pty output was {:?}",
+            String::from_utf8_lossy(&output)
+        );
+
+        let status = waitpid(child.child, None).unwrap();
+        assert!(matches!(status, WaitStatus::Exited(_, 0)));
+    }
+
+    #[cfg(all(unix, not(target_os = "aix")))]
+    #[test]
+    fn spawn_pty_command_sets_child_working_directory() {
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        use nix::sys::wait::{WaitStatus, waitpid};
+
+        let child = spawn_pty_command(
+            "/bin/sh",
+            None,
+            &["-c", "pwd"],
+            &[],
+            Some("/tmp"),
+            Some(WindowSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            }),
+        )
+        .unwrap();
+        let mut master = std::fs::File::from(child.master);
+        let start = Instant::now();
+        let mut output = Vec::new();
+        let mut buf = [0u8; 64];
+
+        while start.elapsed() < Duration::from_secs(2) && !output.windows(4).any(|w| w == b"/tmp") {
+            match master.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => output.extend_from_slice(&buf[..n]),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            output.windows(4).any(|w| w == b"/tmp"),
             "pty output was {:?}",
             String::from_utf8_lossy(&output)
         );

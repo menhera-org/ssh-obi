@@ -114,7 +114,7 @@ if errorlevel 1 (
     goto fail
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $bin=$env:SSH_OBI_BIN_DIR; $path=[Environment]::GetEnvironmentVariable('Path','User'); if ([string]::IsNullOrEmpty($path)) { [Environment]::SetEnvironmentVariable('Path',$bin,'User') } elseif (($path -split ';') -notcontains $bin) { [Environment]::SetEnvironmentVariable('Path',($path.TrimEnd(';') + ';' + $bin),'User') }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $bin=$env:SSH_OBI_BIN_DIR; $normalized=$bin.TrimEnd('\'); $path=[Environment]::GetEnvironmentVariable('Path','User'); $found=$false; if (-not [string]::IsNullOrEmpty($path)) { foreach ($entry in ($path -split ';')) { if ($entry.TrimEnd('\') -ieq $normalized) { $found=$true; break } } }; if ([string]::IsNullOrEmpty($path)) { [Environment]::SetEnvironmentVariable('Path',$bin,'User') } elseif (-not $found) { [Environment]::SetEnvironmentVariable('Path',($path.TrimEnd(';') + ';' + $bin),'User') }"
 if errorlevel 1 (
     set "obi_error=failed to update the user PATH"
     goto fail

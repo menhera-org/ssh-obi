@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::bootstrap::{
     INSTALL_OK_MARKER, INSTALL_REQUIRED_MARKER, READY_MARKER, remote_shell_command,
+    terminal_type_from_env,
 };
 use crate::cli::{ClientAction, ClientArgs};
 use crate::protocol::{
@@ -89,7 +90,8 @@ fn run_client_attempt(
     attempt_id: u64,
 ) -> Result<ClientAttemptResult, ClientRunError> {
     let server_args = server_args_for_action(args);
-    let remote_command = remote_shell_command(&server_args);
+    let term = terminal_type_from_env();
+    let remote_command = remote_shell_command(&server_args, &term);
     let ssh_args = args.ssh_command_args(&remote_command);
 
     let mut child = Command::new("ssh")
