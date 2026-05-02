@@ -11,6 +11,11 @@ Supported local client platforms:
 
 The client requires a working system `ssh` binary.
 
+On Windows, use Windows Terminal or another console that supports Windows
+virtual terminal input. This lets special keys such as arrows, Home/End, and
+other line-editing keys reach the remote shell as normal terminal escape
+sequences.
+
 ## Remote Server Platforms
 
 Supported remote server platforms:

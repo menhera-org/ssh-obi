@@ -25,6 +25,21 @@ Open a new terminal and try:
 ssh-obi.exe --help
 ```
 
+## Arrow keys do not work from Windows
+
+Use Windows Terminal or another console with Windows virtual terminal input
+support. While attached, `ssh-obi.exe` enables that mode so special keys are
+sent to the remote PTY as escape sequences.
+
+To check whether key bytes are reaching the remote shell, run:
+
+```sh
+cat -v
+```
+
+Then press Up. A working Windows client should print something like `^[[A`.
+Press `Ctrl-C` to leave `cat`.
+
 ## The picker shows `(unknown)` in `WHAT`
 
 The `WHAT` column is best-effort. It depends on the remote OS and process table

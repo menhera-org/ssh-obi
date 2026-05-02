@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3236a50a.js";
+            window.path_to_searchindex_js = "searchindex-b89fb2c7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6266f562.js"></script>
@@ -338,6 +338,10 @@ batch file, then run it:</p>
 </ul>
 <p>Restart the terminal if <code>ssh-obi.exe</code> is not found immediately after PATH
 updates.</p>
+<p>Windows Terminal is recommended for interactive use. <code>ssh-obi.exe</code> enables
+Windows virtual terminal input while attached, so arrow keys and other
+line-editing keys are forwarded to the remote shell correctly in terminals that
+support that console mode.</p>
 <p>You can run either Windows bootstrap repeatedly to update <code>ssh-obi.exe</code>. The
 installer only adds the install directory to the user PATH when it is not
 already present.</p>
@@ -487,6 +491,10 @@ will not list that session.</p>
 <li>Windows x86_64</li>
 </ul>
 <p>The client requires a working system <code>ssh</code> binary.</p>
+<p>On Windows, use Windows Terminal or another console that supports Windows
+virtual terminal input. This lets special keys such as arrows, Home/End, and
+other line-editing keys reach the remote shell as normal terminal escape
+sequences.</p>
 <h2 id="remote-server-platforms"><a class="header" href="#remote-server-platforms">Remote Server Platforms</a></h2>
 <p>Supported remote server platforms:</p>
 <ul>
@@ -545,6 +553,15 @@ that change.</p>
 <p>Open a new terminal and try:</p>
 <pre><code class="language-powershell">ssh-obi.exe --help
 </code></pre>
+<h2 id="arrow-keys-do-not-work-from-windows"><a class="header" href="#arrow-keys-do-not-work-from-windows">Arrow keys do not work from Windows</a></h2>
+<p>Use Windows Terminal or another console with Windows virtual terminal input
+support. While attached, <code>ssh-obi.exe</code> enables that mode so special keys are
+sent to the remote PTY as escape sequences.</p>
+<p>To check whether key bytes are reaching the remote shell, run:</p>
+<pre><code class="language-sh">cat -v
+</code></pre>
+<p>Then press Up. A working Windows client should print something like <code>^[[A</code>.
+Press <code>Ctrl-C</code> to leave <code>cat</code>.</p>
 <h2 id="the-picker-shows-unknown-in-what"><a class="header" href="#the-picker-shows-unknown-in-what">The picker shows <code>(unknown)</code> in <code>WHAT</code></a></h2>
 <p>The <code>WHAT</code> column is best-effort. It depends on the remote OS and process table
 details. Failure to detect the foreground command does not affect session

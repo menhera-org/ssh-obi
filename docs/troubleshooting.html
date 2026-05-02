@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3236a50a.js";
+            window.path_to_searchindex_js = "searchindex-b89fb2c7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6266f562.js"></script>
@@ -190,6 +190,15 @@ that change.</p>
 <p>Open a new terminal and try:</p>
 <pre><code class="language-powershell">ssh-obi.exe --help
 </code></pre>
+<h2 id="arrow-keys-do-not-work-from-windows"><a class="header" href="#arrow-keys-do-not-work-from-windows">Arrow keys do not work from Windows</a></h2>
+<p>Use Windows Terminal or another console with Windows virtual terminal input
+support. While attached, <code>ssh-obi.exe</code> enables that mode so special keys are
+sent to the remote PTY as escape sequences.</p>
+<p>To check whether key bytes are reaching the remote shell, run:</p>
+<pre><code class="language-sh">cat -v
+</code></pre>
+<p>Then press Up. A working Windows client should print something like <code>^[[A</code>.
+Press <code>Ctrl-C</code> to leave <code>cat</code>.</p>
 <h2 id="the-picker-shows-unknown-in-what"><a class="header" href="#the-picker-shows-unknown-in-what">The picker shows <code>(unknown)</code> in <code>WHAT</code></a></h2>
 <p>The <code>WHAT</code> column is best-effort. It depends on the remote OS and process table
 details. Failure to detect the foreground command does not affect session

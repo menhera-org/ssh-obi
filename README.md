@@ -31,7 +31,7 @@ These clarify implementation choices that are easy to get subtly wrong:
 - **Replay may duplicate recent bytes.** Reattach replays the daemon's current bounded ring buffer, and duplicates are acceptable. The implementation does not track a per-client replay cursor.
 - **Ambiguous disconnects reconnect first.** If the client loses the SSH/broker connection without a graceful `ClientShouldExit` or shell-exit report, it reconnects. If the session is then gone or cannot provide an exit status, the client fails rather than guessing success.
 - **Foreground command detection is best-effort only.** The daemon must not interfere with the spawned shell to improve the `WHAT` column. POSIX-ish process-group/proc-table guessing is acceptable, and failure falls back to `(unknown)`.
-- **Windows is client-only.** The Windows build can run the local `ssh-obi` client and use the system `ssh` binary, but Windows is not a supported remote server platform.
+- **Windows is client-only.** The Windows build can run the local `ssh-obi` client and use the system `ssh` binary, but Windows is not a supported remote server platform. Windows Terminal or another console with Windows virtual terminal input support is recommended so arrows and other line-editing keys reach the remote shell correctly.
 
 ## Architecture
 

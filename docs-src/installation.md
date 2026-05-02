@@ -82,6 +82,11 @@ Both Windows bootstraps:
 Restart the terminal if `ssh-obi.exe` is not found immediately after PATH
 updates.
 
+Windows Terminal is recommended for interactive use. `ssh-obi.exe` enables
+Windows virtual terminal input while attached, so arrow keys and other
+line-editing keys are forwarded to the remote shell correctly in terminals that
+support that console mode.
+
 You can run either Windows bootstrap repeatedly to update `ssh-obi.exe`. The
 installer only adds the install directory to the user PATH when it is not
 already present.
