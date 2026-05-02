@@ -1,0 +1,192 @@
+# ssh-obi
+
+> Lightweight per-user terminal multiplexer with auto-reconnecting sessions tunneled over plain SSH — preserves the local terminal's native scrollback (unlike mosh) and requires no system-wide daemon (unlike Eternal Terminal).
+
+**Status:** early development. CLI, wire protocol, and library APIs are unstable until `0.1.0`.
+
+## What it is
+
+`ssh-obi` keeps remote shells alive across SSH disconnects, suspend/resume, and IP changes.
+
+- **Transport is plain SSH.** No separate port, no UDP, no custom auth — if you can `ssh user@host`, you can `ssh-obi user@host`.
+- **The persistent server is per-user.** No setuid binary, no system service, no shared state between users.
+- **The data path is a byte stream**, so the local terminal emulator's scrollback, search, and copy-paste keep working exactly as with vanilla SSH.
+- **Multiple concurrent sessions per user** on a remote, each surviving disconnects independently. On connect the client picks the right one: auto-attach if exactly one is free, prompt if many.
+
+**Scope boundaries** (commitments, not "not yet"):
+
+- **No window or pane management.** Pure 1:1 forwarding between local TTY and remote PTY. Combine with tmux on the remote if you want multiplexing.
+- **No in-band escape sequences.** Bytes typed locally are bytes the remote shell sees. Detach is initiated by running `ssh-obi-server --detach` *inside* the remote session.
+- **Not a screen-state replicator.** Only a bounded recent-output buffer is replayed on reconnect — older history lives in the local terminal's scrollback.
+
+## Architecture
+
+Three process roles on the remote:
+
+1. **Daemon** (`ssh-obi-server --daemon`) — owns one PTY master and one user shell. One daemon per session. Long-lived; runs under `user@UID.service` on systemd Linux or as a re-parented daemon elsewhere. Listens on a UNIX-domain socket at `/tmp/ssh-obi-<uid>/<session-id>.sock`. Tracks: init time, last-detach time, attached state, and the current foreground command on its PTY. We do not do systemd-work ourselves. That's the user's concern. We just daemonize.
+2. **Broker** (`ssh-obi-server`, no flag) — short-lived, spawned by SSH inside the login session. Bridges SSH stdio ↔ a chosen daemon's UNIX socket. Dies when SSH disconnects; the daemon does not.
+3. **Detach helper** (`ssh-obi-server --detach`) — short-lived, run inside a remote session by the user. Reads `$SSH_OBI_SOCKET` from its environment, connects to the daemon, sends `Detach`, exits.
+
+### Session selection on connect
+
+Each `ssh-obi user@host` invocation goes through this dance over a single SSH connection:
+
+1. Client SSH-execs the bootstrap (see "Auto-install"); bootstrap exec's `ssh-obi-server`.
+2. Broker enumerates sessions for the current user — sockets under `/tmp/ssh-obi-<uid>/`, probed for liveness — and reports the *free* ones (no attached broker) to the client as `(session_id, init_time, last_detach_time, current_command)`.
+3. Client decides:
+   - **Zero free sessions** → request "new session"; daemon spawns; broker attaches.
+   - **Exactly one free session** → attach to it automatically.
+   - **Multiple free sessions** → prompt the user locally:
+     ```
+     Select a session to attach:
+
+       #   INIT                 DETACH               WHAT
+       1   2026-05-01 09:14     2026-05-02 11:02     bash
+       2   2026-05-01 14:30     2026-05-02 09:55     vim notes.md
+       3   2026-05-02 10:11     2026-05-02 10:48     cargo watch
+       n   (new session)
+
+     >
+     ```
+4. Client sends the choice (`1`, `2`, …, or `n`); broker connects to the chosen daemon (or spawns a new one); real protocol takes over on the same stdio channel.
+
+A session is "free" when no broker is currently attached. Attached sessions are excluded from the picker — one client per session. The picker filter is UX; the **authoritative arbiter is the daemon itself**, which refuses any second broker connection with a `SessionBusy` control message and closes the socket. This handles the race between "list sessions" and "attach to chosen one," and the case where two clients both pass `--session ID` for the same active session. The losing client surfaces `session is currently in use` to the user. Override the auto/prompt logic with:
+
+- `ssh-obi --new user@host` — always create a new session.
+- `ssh-obi --session ID user@host` — attach to a specific session ID.
+- `ssh-obi --list user@host` — print the listing and exit without attaching.
+
+### Detach
+
+When the broker exits (network drop, or `ssh-obi-server --detach`), the daemon's local socket sees EOF. The daemon updates `last_detach_time` and waits for the next broker. The shell is *not* sent SIGHUP — surviving disconnects is the whole point.
+
+The daemon **continues draining the PTY master fd at all times**, attached or not. This is not optional: if the daemon ever stops reading, the kernel's PTY buffer fills, and the shell blocks on its next `write()` — which would effectively pause every running process whose output reaches the terminal. So during detach, output is read continuously and appended to the same bounded ring buffer (default 64 KiB) used for replay. When the ring fills, oldest bytes are evicted. On reattach, the ring's current contents are replayed to the new broker, then live forwarding resumes.
+
+`ssh-obi-server --detach` differs from a network drop by sending a `ClientShouldExit` control message via the daemon to the broker before closing. The client treats `ClientShouldExit` as graceful (status 0, no reconnect). All other disconnections hit the reconnect loop. Getting this asymmetry right is load-bearing.
+
+### Shell exit
+
+When the user's shell exits normally, the daemon catches SIGCHLD, forwards the exit code to the broker (so the client can mirror it as its own exit code), unlinks its socket, and exits.
+
+### Reconnect resumption
+
+Reconnect is **byte-stream-based**, not screen-state-based. The new broker reattaches, the daemon replays the current ring contents (whatever survived from the detach period; see "Detach" above) and then resumes live forwarding. Anything older than the ring is gone — the client's terminal scrollback already has it. We do not maintain any states about terminal screens.
+
+## Project layout
+
+```
+ssh-obi/
+├── Cargo.toml
+├── LICENSE-APACHE
+├── LICENSE-MPL
+├── README.md
+├── bootstrap.sh                    # embedded into the client via include_str!
+└── src/
+    ├── lib.rs                      # re-exports the modules below as the `ssh_obi` library crate
+    ├── protocol.rs                 # wire protocol: framing, capability handshake, control messages
+    ├── session.rs                  # session id, listing, picker logic, on-remote enumeration
+    ├── pty.rs                      # PTY open, raw-mode termios, winsize
+    ├── transport.rs                # framed I/O over any AsyncRead + AsyncWrite (SSH stdio or UNIX socket)
+    ├── daemon.rs                   # double-fork + setsid + chdir + umask + stdio redirect; replay ring
+    ├── platform/
+    │   ├── mod.rs
+    │   ├── linger.rs               # Linux: detect KillUserProcesses + linger state, warn user
+    │   └── foreground.rs           # current foreground command lookup (Linux /proc, BSD sysctl, macOS proc_pidpath)
+    └── bin/
+        ├── ssh-obi/
+        │   └── main.rs             # client: arg parsing, SSH spawn, raw-mode TTY, picker UI, reconnect loop
+        └── ssh-obi-server/
+            └── main.rs             # broker (default), daemon (--daemon), detach helper (--detach)
+```
+
+## Wire protocol
+
+Stable across all major versions. Forward-compatible by design:
+
+- **Fixed framing.** `msg_type: u8`, `flags: u8`, `length: u32 (BE)`, then `length` bytes of CBOR-encoded payload. Receivers must skip unknown `msg_type` silently.
+- **Capability handshake, not version negotiation.** Each side sends a list of capability strings (`pty.v1`, `replay.v1`, `detach.v1`, `session-list.v1`, `exit-code.v1`). The intersection is the working set. New features ship as new capabilities; existing capabilities are frozen on first release. There is no "v2 of `pty.v1`" — that would be `pty.v2`, a separate capability.
+- **Message bodies are CBOR** with stable field tags. Adding a field requires a new capability, never an in-place edit to an existing one.
+- **`ssh-obi-server --protocol-check <baseline>`** is the binary-compatibility probe used by the bootstrap. Returns 0 if the server can speak the framing/handshake of any protocol the given baseline supports. This is the only place a version *number* appears on the wire — and it's about binary compatibility, not feature compatibility.
+
+## Auto-install over SSH
+
+A single SSH invocation handles "install if needed, then attach" with one auth round-trip:
+
+```sh
+ssh host 'sh -s -- <args>' < bootstrap.sh
+```
+
+Bootstrap behavior on the remote:
+
+1. If `~/.ssh-obi/bin/ssh-obi-server --protocol-check $WANT` succeeds, `exec` it.
+2. Otherwise write `OBI-INSTALL-REQUIRED` to stdout and read a line from stdin.
+3. The client prompts the user locally: `installing ssh-obi on host, continue? [Y/n]`. It writes `OBI-INSTALL-OK` or aborts.
+4. The bootstrap downloads the release archive (`curl -fsSL` || `wget -qO-` || `fetch -qo -` || `ftp -o - -M`), verifies signature against a key embedded in the script, installs to `~/.ssh-obi/bin/`, updates shell rc files (`~/.bashrc`, `~/.zshenv`, `~/.config/fish/conf.d/ssh-obi.fish` — *not* `~/.bash_profile`, because non-interactive SSH execution is the target), `exec`s the server.
+5. Real handshake takes over on the same stdio channel.
+
+Bootstrap output uses the `OBI-` line prefix so motd/rc-file noise can't be mistaken for protocol. Strict line discipline: nothing else writes to stdout until the bootstrap `exec`s the server. `bootstrap.sh` is `include_str!`'d into the client at build time — single source of truth.
+
+## Cargo.toml (skeleton)
+
+```toml
+[dependencies]
+nix       = { version = "0.31", features = ["term", "process", "signal", "fs", "socket"] }
+tokio     = { version = "1",    features = ["rt-multi-thread", "macros", "io-util", "net", "signal", "process", "fs"] }
+bytes     = "1"
+ciborium  = "0.2"      # CBOR encoding for protocol bodies
+clap      = { version = "4", features = ["derive"] }
+anyhow    = "1"
+thiserror = "1"
+tracing   = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+blake3    = "1"        # session id generation
+chrono    = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+serde     = { version = "1", features = ["derive"] }
+```
+
+`nix` features rationale: `term` covers PTY + termios; `process` covers `fork`/`setsid`; `signal` covers SIGHUP/SIGCHLD/SIGWINCH; `fs` covers `umask`/`chdir` during daemonization; `socket` is for the broker ↔ daemon UNIX-domain channel. No defaults (nix has none since 0.27).
+
+## Platform support
+
+- **Linux (systemd):** primary target. The daemon must outlive the SSH session scope. On distros with `KillUserProcesses=yes` (Fedora, Arch, RHEL), users must run `loginctl enable-linger $USER` once. The daemon detects this state and prints a one-shot warning. On Debian/Ubuntu (`KillUserProcesses=no` by default) it just works.
+- **Linux without systemd** (Alpine, Void, Devuan, Gentoo+OpenRC): supported. Plain double-fork suffices.
+- **macOS, FreeBSD, OpenBSD, NetBSD, illumos:** supported. Plain double-fork suffices.
+- **Windows, Android:** out of scope.
+
+## Build & develop
+
+```sh
+cargo build --release
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all
+```
+
+Integration tests pipe a client process directly to a server process (no real SSH) to exercise the wire protocol, picker logic, reconnect, and detach.
+
+## Key design decisions
+
+These are settled — please don't relitigate without discussion:
+
+- **`nix` for syscalls, not `libc` directly.** Cleaner errors, fewer `unsafe` blocks, smooths BSD/Linux/macOS differences. Drop to `libc` only for the rare call `nix` doesn't expose.
+- **`tokio` + `AsyncFd` for PTY and socket I/O.** `nix` for setup, tokio for the event loop.
+- **Hand-rolled daemonization, not the `daemonize` crate.** We need to detach *after* the daemon's UNIX socket has bound, so bind failures can be reported to the user before going silent.
+- **Bounded replay buffer, not screen reconstruction.** No mosh-style framebuffer ownership; the local terminal owns the screen and scrollback.
+- **Session IDs are server-generated**, short (8–10 chars of base32-encoded blake3 over high-resolution monotonic time + random nonce), and unique within a user's session set on a given remote. *Not* derived from client identity — that would be incompatible with multi-machine selection.
+- **Sessions are user-namespaced on the remote.** Any client authenticating as the same remote user can list and attach to that user's free sessions, regardless of which workstation it's coming from.
+- **"WHAT" column** in the picker is the current foreground process for the session's PTY, via `tcgetpgrp` plus per-OS process-info lookup (`/proc/$pid/comm` on Linux, `kinfo_proc` via `sysctl` on BSD, `proc_pidpath` on macOS). Falls back to `(unknown)` on platforms where lookup fails (but please do a best portable guess).
+- **Three modes for the server binary, dispatched in `main()`** by `--daemon` / `--detach` / no flag (broker default).
+- **Detach is out-of-band** via `$SSH_OBI_SESSION` and `$SSH_OBI_SOCKET` exported into the shell's environment. `ClientShouldExit` is the only signal the client treats as graceful (status 0, no reconnect); every other disconnect hits the reconnect loop.
+- **`SessionBusy` is the daemon-level race arbiter.** Any second broker connecting to a socket whose first broker hasn't yet seen EOF is refused with `SessionBusy` and the socket is closed. The picker's exclusion of attached sessions is UX layered on top; correctness comes from the daemon, not from coordinated clients. This means a brief window where two pickers see the same session as "free" cannot result in two clients sharing one PTY — at most one wins, the other gets a clear error.
+- **Daemon never stops reading the PTY master.** Whether attached or detached, the read loop runs continuously and feeds the bounded ring buffer. Stopping reads would let the kernel's PTY buffer fill and block the shell's writes — which would silently freeze every process that prints to the terminal. This is non-negotiable; do not introduce conditional reading "to save CPU on long detaches."
+- **Shell exit terminates the session.** When the daemon's child shell exits (any cause: normal `exit`, `kill`, OOM, SIGSEGV), the daemon catches SIGCHLD, forwards the exit code and signal info through to any attached broker so the client can mirror them, unlinks its socket, and exits. The session is gone — next `ssh-obi user@host` will not see it in the picker.
+- **Socket location: `/tmp/ssh-obi-<uid>/<session-id>.sock`.** Per-user subdir created with mode 0700, ownership-checked on reuse. Stale sockets handled via `connect()`-then-`unlink()`-on-`ECONNREFUSED`. Refuses to start on NFS/CIFS/SMB. Validates path length under 100 bytes (macOS/BSD `sun_path` cap is 104).
+- **Wire protocol is forward-compatible by capability negotiation,** not version bumping. Once a capability ships, its message format is frozen forever. The only on-wire version number is `--protocol-check`, which gates binary compatibility of the framing/handshake layer.
+- **Auto-install over a single SSH invocation** via embedded `bootstrap.sh` piped on stdin. One auth round-trip total, even on first-ever connect to a remote. Bootstrap writes shell rc files reachable from non-interactive SSH (`~/.bashrc`, `~/.zshenv`, fish `conf.d`), not login-only files.
+
+## License
+
+Dual-licensed at the user's option under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+- Mozilla Public License, Version 2.0 ([LICENSE-MPL](LICENSE-MPL) or <https://www.mozilla.org/en-US/MPL/2.0/>)

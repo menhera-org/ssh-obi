@@ -1,0 +1,16 @@
+[package]
+name = "ssh-obi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0 OR MPL-2.0"
+repository = "https://github.com/menhera-org/ssh-obi"
+homepage = "https://obi.menhera.org"
+readme = "README.md"
+keywords = ["ssh", "terminal", "pty", "reconnect", "tmux"]
+categories = ["command-line-utilities", "network-programming"]
+description = "Lightweight per-user terminal multiplexer with auto-reconnecting sessions tunneled over plain SSH — preserves the local terminal's native scrollback (unlike mosh) and requires no system-wide daemon (unlike Eternal Terminal)."
+
+[dependencies]
+clap = { version = "4", registry = "menhera-cooldown", features = ["derive"] }
+nix = { version = "0.31", registry = "menhera-cooldown", features = ["term", "signal", "process", "fs"] }
