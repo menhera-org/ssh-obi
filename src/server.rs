@@ -18,6 +18,7 @@ use crate::transport::{FramedReader, FramedWriter};
 
 pub const ENV_SESSION: &str = "SSH_OBI_SESSION";
 pub const ENV_SOCKET: &str = "SSH_OBI_SOCKET";
+const DAEMON_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn detach_from_env() -> Result<(), ServerError> {
     let socket = env::var(ENV_SOCKET).map_err(|_| ServerError::MissingEnvironment(ENV_SOCKET))?;
@@ -149,22 +150,12 @@ fn launch_daemon(uid: u32) -> Result<crate::session::SessionId, ServerError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        // SAFETY: pre_exec runs after fork and before exec in the child. The closure only calls
-        // setsid and constructs an io::Error from errno on failure.
-        unsafe {
-            command.pre_exec(|| {
-                nix::unistd::setsid()
-                    .map(|_| ())
-                    .map_err(|err| std::io::Error::from_raw_os_error(err as i32))
-            });
-        }
+    let mut child = command.spawn().map_err(ServerError::SpawnDaemon)?;
+    let status = child.wait().map_err(ServerError::WaitDaemonStarter)?;
+    if !status.success() {
+        return Err(ServerError::DaemonStarterFailed(status.code()));
     }
 
-    command.spawn().map_err(ServerError::SpawnDaemon)?;
     wait_for_daemon_ready(&socket_path)?;
     Ok(session_id)
 }
@@ -264,6 +255,7 @@ pub fn detach_via_socket(socket: impl AsRef<std::path::Path>) -> Result<(), Serv
     use std::os::unix::net::UnixStream;
 
     let stream = UnixStream::connect(socket).map_err(ServerError::Connect)?;
+    configure_daemon_control_stream(&stream)?;
     let mut writer = FramedWriter::new(stream);
     writer.write_body(MessageType::DETACH, 0, &DetachRequest)?;
     writer.flush()?;
@@ -275,6 +267,7 @@ pub fn query_daemon_info(socket: impl AsRef<std::path::Path>) -> Result<DaemonIn
     use std::os::unix::net::UnixStream;
 
     let stream = UnixStream::connect(socket).map_err(ServerError::Connect)?;
+    configure_daemon_control_stream(&stream)?;
     let reader_stream = stream.try_clone().map_err(ServerError::Connect)?;
     let mut writer = FramedWriter::new(stream);
     writer.write_body(MessageType::DAEMON_INFO_REQUEST, 0, &DaemonInfoRequest)?;
@@ -290,6 +283,19 @@ pub fn query_daemon_info(socket: impl AsRef<std::path::Path>) -> Result<DaemonIn
     }
 
     Ok(frame.decode_body()?)
+}
+
+#[cfg(unix)]
+fn configure_daemon_control_stream(
+    stream: &std::os::unix::net::UnixStream,
+) -> Result<(), ServerError> {
+    stream
+        .set_read_timeout(Some(DAEMON_CONTROL_TIMEOUT))
+        .map_err(ServerError::ConfigureDaemonControl)?;
+    stream
+        .set_write_timeout(Some(DAEMON_CONTROL_TIMEOUT))
+        .map_err(ServerError::ConfigureDaemonControl)?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -349,6 +355,9 @@ pub enum ServerError {
     UnexpectedMessage(u8),
     CurrentExe(std::io::Error),
     SpawnDaemon(std::io::Error),
+    WaitDaemonStarter(std::io::Error),
+    ConfigureDaemonControl(std::io::Error),
+    DaemonStarterFailed(Option<i32>),
     DaemonNotReady {
         path: std::path::PathBuf,
         source: Option<std::io::Error>,
@@ -375,6 +384,19 @@ impl fmt::Display for ServerError {
             }
             Self::CurrentExe(err) => write!(f, "failed to resolve server executable: {err}"),
             Self::SpawnDaemon(err) => write!(f, "failed to launch daemon: {err}"),
+            Self::WaitDaemonStarter(err) => {
+                write!(f, "failed to wait for daemon starter: {err}")
+            }
+            Self::ConfigureDaemonControl(err) => {
+                write!(f, "failed to configure daemon control socket: {err}")
+            }
+            Self::DaemonStarterFailed(code) => {
+                write!(f, "daemon starter exited unsuccessfully")?;
+                if let Some(code) = code {
+                    write!(f, " with status {code}")?;
+                }
+                Ok(())
+            }
             Self::DaemonNotReady { path, source } => {
                 write!(f, "daemon did not become ready at {}", path.display())?;
                 if let Some(source) = source {
@@ -398,7 +420,11 @@ impl fmt::Display for ServerError {
 impl std::error::Error for ServerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Connect(err) | Self::CurrentExe(err) | Self::SpawnDaemon(err) => Some(err),
+            Self::Connect(err)
+            | Self::CurrentExe(err)
+            | Self::SpawnDaemon(err)
+            | Self::WaitDaemonStarter(err)
+            | Self::ConfigureDaemonControl(err) => Some(err),
             Self::Protocol(err) => Some(err),
             Self::SocketPath(err) => Some(err),
             Self::SessionId(err) => Some(err),

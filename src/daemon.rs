@@ -128,6 +128,8 @@ mod runtime {
             .set_nonblocking(true)
             .map_err(DaemonError::Listen)?;
 
+        daemonize_after_bind()?;
+
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let pty = spawn_pty_command(
             &shell,
@@ -168,6 +170,37 @@ mod runtime {
         }
 
         let _ = fs::remove_file(&socket_path);
+        Ok(())
+    }
+
+    fn daemonize_after_bind() -> Result<(), DaemonError> {
+        use nix::sys::stat::{Mode, umask};
+        use nix::unistd::{ForkResult, chdir, dup2_stderr, dup2_stdin, dup2_stdout, fork, setsid};
+
+        match unsafe { fork() }.map_err(DaemonError::Fork)? {
+            ForkResult::Parent { .. } => unsafe { nix::libc::_exit(0) },
+            ForkResult::Child => {}
+        }
+
+        setsid().map_err(DaemonError::SetSid)?;
+
+        match unsafe { fork() }.map_err(DaemonError::Fork)? {
+            ForkResult::Parent { .. } => unsafe { nix::libc::_exit(0) },
+            ForkResult::Child => {}
+        }
+
+        chdir("/").map_err(DaemonError::Chdir)?;
+        umask(Mode::empty());
+
+        let dev_null = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .map_err(DaemonError::OpenDevNull)?;
+        dup2_stdin(&dev_null).map_err(DaemonError::RedirectStdio)?;
+        dup2_stdout(&dev_null).map_err(DaemonError::RedirectStdio)?;
+        dup2_stderr(&dev_null).map_err(DaemonError::RedirectStdio)?;
+
         Ok(())
     }
 
@@ -468,6 +501,11 @@ mod runtime {
         SessionId(SessionIdError),
         SocketPath(SocketPathError),
         SocketAlreadyExists(PathBuf),
+        Fork(nix::errno::Errno),
+        SetSid(nix::errno::Errno),
+        Chdir(nix::errno::Errno),
+        OpenDevNull(io::Error),
+        RedirectStdio(nix::errno::Errno),
         Bind(io::Error),
         Listen(io::Error),
         Accept(io::Error),
@@ -489,6 +527,11 @@ mod runtime {
                 Self::SocketAlreadyExists(path) => {
                     write!(f, "daemon socket already exists: {}", path.display())
                 }
+                Self::Fork(err) => write!(f, "failed to fork daemon: {err}"),
+                Self::SetSid(err) => write!(f, "failed to create daemon session: {err}"),
+                Self::Chdir(err) => write!(f, "failed to chdir daemon to /: {err}"),
+                Self::OpenDevNull(err) => write!(f, "failed to open /dev/null: {err}"),
+                Self::RedirectStdio(err) => write!(f, "failed to redirect daemon stdio: {err}"),
                 Self::Bind(err) => write!(f, "failed to bind daemon socket: {err}"),
                 Self::Listen(err) => write!(f, "failed to configure daemon listener: {err}"),
                 Self::Accept(err) => write!(f, "failed to accept daemon connection: {err}"),
@@ -515,6 +558,7 @@ mod runtime {
                 | Self::Listen(err)
                 | Self::Accept(err)
                 | Self::StreamClone(err)
+                | Self::OpenDevNull(err)
                 | Self::PtyWrite(err) => Some(err),
                 Self::Pty(err) | Self::PtyWindowSize(err) => Some(err),
                 Self::Protocol(err) => Some(err),
