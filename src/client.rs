@@ -10,9 +10,9 @@ use crate::bootstrap::{
 };
 use crate::cli::{ClientAction, ClientArgs};
 use crate::protocol::{
-    AttachSessionRequest, AttachedSession, DetachSessionRequest, ErrorMessage, ExitStatus, Frame,
-    MessageType, NewSessionRequest, ProtocolError, PtyData, SessionBusy, SessionList,
-    SessionListRequest, WindowSize,
+    AttachSessionRequest, AttachedSession, Capabilities, DetachSessionRequest, ErrorMessage,
+    ExitStatus, Frame, MessageType, NewSessionRequest, ProtocolError, PtyData, SessionBusy,
+    SessionList, SessionListRequest, WindowSize,
 };
 use crate::session::{
     AutoSelection, SessionIdError, SessionInfo, auto_select, render_session_table,
@@ -52,8 +52,10 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
         match result {
             Ok(success) => return Ok(success.exit_code),
             Err(failure) if is_ambiguous_disconnect(&failure.error) => {
-                let reached_attached_session = failure.session_id.is_some();
-                let Some(session_id) = failure.session_id.or_else(|| known_session_id.clone())
+                let reached_attached_session = failure.confirmed_session_id.is_some();
+                let Some(session_id) = failure
+                    .confirmed_session_id
+                    .or_else(|| known_session_id.clone())
                 else {
                     return Err(ClientRunError::ConnectionLostBeforeSessionKnown(Box::new(
                         failure.error,
@@ -108,6 +110,10 @@ fn run_client_attempt(
         .ok_or(ClientRunError::MissingChildStdout)?;
 
     if let Err(err) = wait_for_bootstrap(&mut child_stdout, &mut child_stdin) {
+        let _ = child.wait();
+        return Err(err);
+    }
+    if let Err(err) = exchange_capabilities(&mut child_stdout, &mut child_stdin) {
         let _ = child.wait();
         return Err(err);
     }
@@ -166,13 +172,16 @@ struct AttachedSessionSuccess {
 
 #[derive(Debug)]
 struct AttachedSessionFailure {
-    session_id: Option<String>,
+    confirmed_session_id: Option<String>,
     error: ClientRunError,
 }
 
 impl AttachedSessionFailure {
-    fn new(session_id: Option<String>, error: ClientRunError) -> Self {
-        Self { session_id, error }
+    fn new(confirmed_session_id: Option<String>, error: ClientRunError) -> Self {
+        Self {
+            confirmed_session_id,
+            error,
+        }
     }
 }
 
@@ -204,15 +213,7 @@ where
             framed_writer.flush()?;
 
             let mut framed_reader = FramedReader::new(reader);
-            let frame = framed_reader
-                .read_frame()?
-                .ok_or(ClientRunError::UnexpectedBrokerEof)?;
-
-            if frame.msg_type() != MessageType::SESSION_LIST {
-                return Err(ClientRunError::UnexpectedBrokerMessage(
-                    frame.msg_type().get(),
-                ));
-            }
+            let frame = read_expected_broker_frame(&mut framed_reader, MessageType::SESSION_LIST)?;
 
             let list: SessionList = frame.decode_body()?;
             let sessions = list
@@ -296,15 +297,7 @@ where
     }
 
     let mut framed_reader = FramedReader::new(reader);
-    let frame = framed_reader
-        .read_frame()?
-        .ok_or(ClientRunError::UnexpectedBrokerEof)?;
-
-    if frame.msg_type() != MessageType::SESSION_LIST {
-        return Err(ClientRunError::UnexpectedBrokerMessage(
-            frame.msg_type().get(),
-        ));
-    }
+    let frame = read_expected_broker_frame(&mut framed_reader, MessageType::SESSION_LIST)?;
 
     let list: SessionList = frame.decode_body()?;
     let sessions = list
@@ -448,19 +441,20 @@ where
     W: Write,
 {
     spawn_broker_reader(reader, attached_io.sender.clone(), attempt_id);
-    let mut session_id = initial_session_id;
+    let expected_session_id = initial_session_id;
+    let mut confirmed_session_id = None;
     let mut writer = FramedWriter::new(writer);
     let mut stdout = io::stdout().lock();
     let mut last_window_size = None;
     let mut stdin_open = true;
 
     send_window_size_if_changed(&mut writer, &mut last_window_size)
-        .map_err(|err| AttachedSessionFailure::new(session_id.clone(), err))?;
+        .map_err(|err| AttachedSessionFailure::new(confirmed_session_id.clone(), err))?;
 
     loop {
         if resize_pending() {
             send_window_size_if_changed(&mut writer, &mut last_window_size)
-                .map_err(|err| AttachedSessionFailure::new(session_id.clone(), err))?;
+                .map_err(|err| AttachedSessionFailure::new(confirmed_session_id.clone(), err))?;
         }
 
         let event = match attached_io.receiver.recv_timeout(Duration::from_millis(50)) {
@@ -468,7 +462,7 @@ where
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(AttachedSessionFailure::new(
-                    session_id,
+                    confirmed_session_id,
                     ClientRunError::UnexpectedBrokerEof,
                 ));
             }
@@ -479,10 +473,16 @@ where
                 writer
                     .write_body(MessageType::PTY_DATA, 0, &PtyData { bytes })
                     .map_err(|err| {
-                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                        AttachedSessionFailure::new(
+                            confirmed_session_id.clone(),
+                            ClientRunError::from(err),
+                        )
                     })?;
                 writer.flush().map_err(|err| {
-                    AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                    AttachedSessionFailure::new(
+                        confirmed_session_id.clone(),
+                        ClientRunError::from(err),
+                    )
                 })?;
             }
             AttachedEvent::Stdin(_) => {}
@@ -491,7 +491,7 @@ where
             }
             AttachedEvent::StdinError(err) => {
                 return Err(AttachedSessionFailure::new(
-                    session_id,
+                    confirmed_session_id,
                     ClientRunError::CopyStdin(err),
                 ));
             }
@@ -500,47 +500,56 @@ where
                 result,
             } if event_attempt_id == attempt_id => {
                 let Some(frame) = result.map_err(|err| {
-                    AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                    AttachedSessionFailure::new(
+                        confirmed_session_id.clone(),
+                        ClientRunError::from(err),
+                    )
                 })?
                 else {
                     return Err(AttachedSessionFailure::new(
-                        session_id,
+                        confirmed_session_id,
                         ClientRunError::UnexpectedBrokerEof,
                     ));
                 };
 
                 if frame.msg_type() == MessageType::ATTACHED_SESSION {
                     let attached: AttachedSession = frame.decode_body().map_err(|err| {
-                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                        AttachedSessionFailure::new(
+                            confirmed_session_id.clone(),
+                            ClientRunError::from(err),
+                        )
                     })?;
-                    if let Some(expected) = session_id.as_ref().cloned()
+                    if let Some(expected) = expected_session_id.as_ref().cloned()
                         && expected != attached.session_id
                     {
                         return Err(AttachedSessionFailure::new(
-                            session_id,
+                            confirmed_session_id,
                             ClientRunError::SessionMismatch {
                                 expected,
                                 actual: attached.session_id,
                             },
                         ));
                     }
-                    session_id = Some(attached.session_id);
+                    confirmed_session_id = Some(attached.session_id);
                     continue;
                 }
 
                 if frame.msg_type() == MessageType::PTY_DATA {
                     let data: PtyData = frame.decode_body().map_err(|err| {
-                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                        AttachedSessionFailure::new(
+                            confirmed_session_id.clone(),
+                            ClientRunError::from(err),
+                        )
                     })?;
                     stdout.write_all(&data.bytes).map_err(|err| {
                         AttachedSessionFailure::new(
-                            session_id.clone(),
+                            confirmed_session_id.clone(),
                             ClientRunError::CopyStdout(err),
                         )
                     })?;
                     stdout.flush().map_err(|err| {
                         AttachedSessionFailure::new(
-                            session_id.clone(),
+                            confirmed_session_id.clone(),
                             ClientRunError::CopyStdout(err),
                         )
                     })?;
@@ -555,35 +564,49 @@ where
 
                 if frame.msg_type() == MessageType::EXIT_STATUS {
                     let status: ExitStatus = frame.decode_body().map_err(|err| {
-                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                        AttachedSessionFailure::new(
+                            confirmed_session_id.clone(),
+                            ClientRunError::from(err),
+                        )
                     })?;
-                    let exit_code = exit_code_from_status(status)
-                        .map_err(|err| AttachedSessionFailure::new(session_id.clone(), err))?;
+                    let exit_code = exit_code_from_status(status).map_err(|err| {
+                        AttachedSessionFailure::new(confirmed_session_id.clone(), err)
+                    })?;
                     return Ok(AttachedSessionSuccess { exit_code });
                 }
 
                 if frame.msg_type() == MessageType::SESSION_BUSY {
                     let busy: SessionBusy = frame.decode_body().map_err(|err| {
-                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                        AttachedSessionFailure::new(
+                            confirmed_session_id.clone(),
+                            ClientRunError::from(err),
+                        )
                     })?;
                     return Err(AttachedSessionFailure::new(
-                        session_id,
+                        confirmed_session_id,
                         ClientRunError::SessionBusy(busy.session_id),
                     ));
                 }
 
                 if frame.msg_type() == MessageType::ERROR {
                     let error: ErrorMessage = frame.decode_body().map_err(|err| {
-                        AttachedSessionFailure::new(session_id.clone(), ClientRunError::from(err))
+                        AttachedSessionFailure::new(
+                            confirmed_session_id.clone(),
+                            ClientRunError::from(err),
+                        )
                     })?;
                     return Err(AttachedSessionFailure::new(
-                        session_id,
+                        confirmed_session_id,
                         ClientRunError::BrokerError(error.message),
                     ));
                 }
 
+                if frame.msg_type().name().is_none() {
+                    continue;
+                }
+
                 return Err(AttachedSessionFailure::new(
-                    session_id,
+                    confirmed_session_id,
                     ClientRunError::UnexpectedBrokerMessage(frame.msg_type().get()),
                 ));
             }
@@ -612,6 +635,58 @@ where
             }
         }
     });
+}
+
+fn read_expected_broker_frame<R>(
+    reader: &mut FramedReader<R>,
+    expected: MessageType,
+) -> Result<Frame, ClientRunError>
+where
+    R: Read,
+{
+    loop {
+        let frame = reader
+            .read_frame()?
+            .ok_or(ClientRunError::UnexpectedBrokerEof)?;
+
+        if frame.msg_type() == expected {
+            return Ok(frame);
+        }
+
+        if frame.msg_type().name().is_none() {
+            continue;
+        }
+
+        return Err(ClientRunError::UnexpectedBrokerMessage(
+            frame.msg_type().get(),
+        ));
+    }
+}
+
+fn exchange_capabilities<R, W>(reader: &mut R, writer: &mut W) -> Result<(), ClientRunError>
+where
+    R: Read,
+    W: Write,
+{
+    {
+        let mut writer = FramedWriter::new(&mut *writer);
+        writer.write_body(
+            MessageType::CAPABILITIES,
+            0,
+            &Capabilities::default_supported(),
+        )?;
+        writer.flush()?;
+    }
+
+    let mut reader = FramedReader::new(reader);
+    let frame = read_expected_broker_frame(&mut reader, MessageType::CAPABILITIES)?;
+    let peer: Capabilities = frame.decode_body()?;
+    let intersection = Capabilities::default_supported().intersection(&peer);
+    if intersection.is_empty() {
+        return Err(ClientRunError::NoSharedCapabilities);
+    }
+
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -887,6 +962,7 @@ pub enum ClientRunError {
         expected: String,
         actual: String,
     },
+    NoSharedCapabilities,
     ConnectionLostBeforeSessionKnown(Box<ClientRunError>),
     ReconnectFailed {
         session_id: String,
@@ -932,6 +1008,7 @@ impl fmt::Display for ClientRunError {
                     "broker attached session {actual}, but client requested {expected}"
                 )
             }
+            Self::NoSharedCapabilities => write!(f, "broker has no shared protocol capabilities"),
             Self::ConnectionLostBeforeSessionKnown(source) => {
                 write!(
                     f,
@@ -995,6 +1072,7 @@ mod tests {
     use super::*;
     use crate::cli::{ClientAction, ClientArgs};
     use std::ffi::OsString;
+    use std::io::Cursor;
 
     fn args(action: ClientAction) -> ClientArgs {
         ClientArgs {
@@ -1002,6 +1080,16 @@ mod tests {
             session: None,
             ssh_args: Vec::new(),
             destination: OsString::from("host"),
+        }
+    }
+
+    fn attached_io_for_test() -> AttachedIo {
+        let (sender, receiver) = mpsc::channel();
+        AttachedIo {
+            _raw_mode: None,
+            receiver,
+            sender,
+            _stdin_thread: thread::spawn(|| {}),
         }
     }
 
@@ -1135,5 +1223,101 @@ mod tests {
         assert_eq!(frame.msg_type(), MessageType::SESSION_LIST_REQUEST);
         let request: SessionListRequest = frame.decode_body().unwrap();
         assert!(!request.continue_after_response);
+    }
+
+    #[test]
+    fn list_action_skips_unknown_message_before_response() {
+        let mut input = Vec::new();
+        {
+            let unknown = Frame::new(MessageType::new(250), 0, Vec::new()).unwrap();
+            unknown.write_to(&mut input).unwrap();
+
+            let mut writer = FramedWriter::new(&mut input);
+            writer
+                .write_body(
+                    MessageType::SESSION_LIST,
+                    0,
+                    &SessionList {
+                        sessions: Vec::new(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let mut output = Vec::new();
+        let action = handle_initial_action(
+            &args(ClientAction::List),
+            &mut input.as_slice(),
+            &mut output,
+        )
+        .unwrap();
+        assert!(matches!(
+            action,
+            InitialActionResult::Control(code) if code == ExitCode::SUCCESS
+        ));
+    }
+
+    #[test]
+    fn capability_exchange_writes_and_reads_capabilities() {
+        let mut input = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut input);
+            writer
+                .write_body(
+                    MessageType::CAPABILITIES,
+                    0,
+                    &Capabilities::default_supported(),
+                )
+                .unwrap();
+        }
+        let mut output = Vec::new();
+
+        exchange_capabilities(&mut input.as_slice(), &mut output).unwrap();
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::CAPABILITIES);
+        let _: Capabilities = frame.decode_body().unwrap();
+    }
+
+    #[test]
+    fn attached_session_does_not_confirm_requested_id_before_attached_message() {
+        let attached_io = attached_io_for_test();
+        let result = run_attached_session(
+            Cursor::new(Vec::<u8>::new()),
+            Vec::<u8>::new(),
+            Some("aaaaaaaa".to_string()),
+            &attached_io,
+            1,
+        )
+        .unwrap_err();
+
+        assert!(result.confirmed_session_id.is_none());
+        assert!(matches!(result.error, ClientRunError::UnexpectedBrokerEof));
+    }
+
+    #[test]
+    fn attached_session_records_authoritative_id_after_attached_message() {
+        let mut input = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut input);
+            writer
+                .write_body(
+                    MessageType::ATTACHED_SESSION,
+                    0,
+                    &AttachedSession {
+                        session_id: "bbbbbbbb".to_string(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let attached_io = attached_io_for_test();
+        let result =
+            run_attached_session(Cursor::new(input), Vec::<u8>::new(), None, &attached_io, 1)
+                .unwrap_err();
+
+        assert_eq!(result.confirmed_session_id.as_deref(), Some("bbbbbbbb"));
+        assert!(matches!(result.error, ClientRunError::UnexpectedBrokerEof));
     }
 }

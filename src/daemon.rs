@@ -101,8 +101,9 @@ mod runtime {
     use crate::daemon::ReplayBuffer;
     use crate::foreground::foreground_command_for_pty;
     use crate::protocol::{
-        BrokerAttachRequest, DaemonInfo, DaemonInfoRequest, DetachRequest, ExitStatus, MessageType,
-        ProtocolError, PtyData, SessionBusy, SessionRecord, UnixTimeMillis, WindowSize,
+        BrokerAttachRequest, Capabilities, DaemonInfo, DaemonInfoRequest, DetachRequest,
+        ExitStatus, MessageType, ProtocolError, PtyData, SessionBusy, SessionRecord,
+        UnixTimeMillis, WindowSize,
     };
     use crate::pty::{PtyError, set_window_size, spawn_pty_command};
     use crate::server::{ENV_SESSION, ENV_SOCKET};
@@ -281,49 +282,77 @@ mod runtime {
         master_write: Arc<Mutex<fs::File>>,
     ) -> Result<(), DaemonError> {
         let mut reader = FramedReader::new(stream.try_clone().map_err(DaemonError::StreamClone)?);
-        let frame = reader.read_frame()?.ok_or(DaemonError::NoRequest)?;
+        let mut saw_frame = false;
 
-        if frame.msg_type() == MessageType::DAEMON_INFO_REQUEST {
-            let _: DaemonInfoRequest = frame.decode_body()?;
-            let foreground = {
-                let master = master_write.lock().expect("pty writer poisoned");
-                foreground_command_for_pty(master.as_fd()).ok().flatten()
+        loop {
+            let Some(frame) = reader.read_frame()? else {
+                return if saw_frame {
+                    Ok(())
+                } else {
+                    Err(DaemonError::NoRequest)
+                };
             };
-            let info = {
-                let state = state.lock().expect("daemon state poisoned");
-                DaemonInfo {
-                    session: state.record(foreground),
+            saw_frame = true;
+
+            if frame.msg_type() == MessageType::CAPABILITIES {
+                let _: Capabilities = frame.decode_body()?;
+                let mut writer =
+                    FramedWriter::new(stream.try_clone().map_err(DaemonError::StreamClone)?);
+                writer.write_body(
+                    MessageType::CAPABILITIES,
+                    0,
+                    &Capabilities::default_supported(),
+                )?;
+                writer.flush()?;
+                continue;
+            }
+
+            if frame.msg_type() == MessageType::DAEMON_INFO_REQUEST {
+                let _: DaemonInfoRequest = frame.decode_body()?;
+                let foreground = {
+                    let master = master_write.lock().expect("pty writer poisoned");
+                    foreground_command_for_pty(master.as_fd()).ok().flatten()
+                };
+                let info = {
+                    let state = state.lock().expect("daemon state poisoned");
+                    DaemonInfo {
+                        session: state.record(foreground),
+                    }
+                };
+                let mut writer = FramedWriter::new(stream);
+                writer.write_body(MessageType::DAEMON_INFO, 0, &info)?;
+                writer.flush()?;
+                return Ok(());
+            }
+
+            if frame.msg_type() == MessageType::DETACH {
+                let _: DetachRequest = frame.decode_body()?;
+                let broker = {
+                    let mut state = state.lock().expect("daemon state poisoned");
+                    state.detach_current(SystemTime::now())
+                };
+                if let Some(writer) = broker {
+                    write_client_should_exit(writer)?;
                 }
-            };
-            let mut writer = FramedWriter::new(stream);
-            writer.write_body(MessageType::DAEMON_INFO, 0, &info)?;
-            writer.flush()?;
-            return Ok(());
-        }
-
-        if frame.msg_type() == MessageType::DETACH {
-            let _: DetachRequest = frame.decode_body()?;
-            let broker = {
-                let mut state = state.lock().expect("daemon state poisoned");
-                state.detach_current(SystemTime::now())
-            };
-            if let Some(writer) = broker {
-                write_client_should_exit(writer)?;
-            }
-            return Ok(());
-        }
-
-        if frame.msg_type() == MessageType::BROKER_ATTACH
-            || frame.msg_type() == MessageType::ATTACH_SESSION
-        {
-            if frame.msg_type() == MessageType::BROKER_ATTACH {
-                let _: BrokerAttachRequest = frame.decode_body()?;
+                return Ok(());
             }
 
-            return attach_broker(stream, reader, state, master_write);
-        }
+            if frame.msg_type() == MessageType::BROKER_ATTACH
+                || frame.msg_type() == MessageType::ATTACH_SESSION
+            {
+                if frame.msg_type() == MessageType::BROKER_ATTACH {
+                    let _: BrokerAttachRequest = frame.decode_body()?;
+                }
 
-        Err(DaemonError::UnexpectedMessage(frame.msg_type().get()))
+                return attach_broker(stream, reader, state, master_write);
+            }
+
+            if frame.msg_type().name().is_none() {
+                continue;
+            }
+
+            return Err(DaemonError::UnexpectedMessage(frame.msg_type().get()));
+        }
     }
 
     fn attach_broker(
@@ -379,6 +408,10 @@ mod runtime {
             if frame.msg_type() == MessageType::DETACH {
                 let _: DetachRequest = frame.decode_body()?;
                 break;
+            }
+
+            if frame.msg_type().name().is_none() {
+                continue;
             }
 
             return Err(DaemonError::UnexpectedMessage(frame.msg_type().get()));

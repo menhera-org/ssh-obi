@@ -15,8 +15,8 @@ use crate::protocol::{
     NewSessionRequest,
 };
 use crate::protocol::{
-    DaemonInfo, DetachSessionRequest, ErrorMessage, MessageType, ProtocolError, SessionList,
-    SessionListRequest,
+    Capabilities, DaemonInfo, DetachSessionRequest, ErrorMessage, MessageType, ProtocolError,
+    SessionList, SessionListRequest,
 };
 use crate::session::{SessionIdError, SocketPathError, socket_dir_for_uid, socket_path_for_uid};
 #[cfg(unix)]
@@ -59,6 +59,17 @@ where
             };
         };
         saw_request = true;
+
+        if frame.msg_type() == MessageType::CAPABILITIES {
+            let _: Capabilities = frame.decode_body()?;
+            writer.write_body(
+                MessageType::CAPABILITIES,
+                0,
+                &Capabilities::default_supported(),
+            )?;
+            writer.flush()?;
+            continue;
+        }
 
         if frame.msg_type() == MessageType::SESSION_LIST_REQUEST {
             let request: SessionListRequest = frame.decode_body()?;
@@ -133,6 +144,10 @@ where
                 writer.flush()?;
                 return proxy_attached_session(reader, writer.into_inner(), daemon);
             }
+        }
+
+        if frame.msg_type().name().is_none() {
+            continue;
         }
 
         let message = format!("unsupported broker request type {}", frame.msg_type().get());
@@ -222,10 +237,50 @@ fn connect_daemon(
 
 #[cfg(unix)]
 fn attach_daemon(daemon: &std::os::unix::net::UnixStream) -> Result<(), ServerError> {
+    exchange_daemon_capabilities(daemon)?;
+
     let mut daemon_writer = FramedWriter::new(daemon.try_clone().map_err(ServerError::Connect)?);
     daemon_writer.write_body(MessageType::BROKER_ATTACH, 0, &BrokerAttachRequest)?;
     daemon_writer.flush()?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn exchange_daemon_capabilities(
+    stream: &std::os::unix::net::UnixStream,
+) -> Result<(), ServerError> {
+    let reader_stream = stream.try_clone().map_err(ServerError::Connect)?;
+    {
+        let mut writer = FramedWriter::new(stream.try_clone().map_err(ServerError::Connect)?);
+        writer.write_body(
+            MessageType::CAPABILITIES,
+            0,
+            &Capabilities::default_supported(),
+        )?;
+        writer.flush()?;
+    }
+
+    let mut reader = FramedReader::new(reader_stream);
+    loop {
+        let frame = reader
+            .read_frame()?
+            .ok_or(ServerError::UnexpectedDaemonEof)?;
+
+        if frame.msg_type() == MessageType::CAPABILITIES {
+            let peer: Capabilities = frame.decode_body()?;
+            let intersection = Capabilities::default_supported().intersection(&peer);
+            if intersection.is_empty() {
+                return Err(ServerError::NoSharedCapabilities);
+            }
+            return Ok(());
+        }
+
+        if frame.msg_type().name().is_none() {
+            continue;
+        }
+
+        return Err(ServerError::UnexpectedMessage(frame.msg_type().get()));
+    }
 }
 
 #[cfg(unix)]
@@ -289,6 +344,8 @@ pub fn detach_via_socket(socket: impl AsRef<std::path::Path>) -> Result<(), Serv
 
     let stream = UnixStream::connect(socket).map_err(ServerError::Connect)?;
     configure_daemon_control_stream(&stream)?;
+    exchange_daemon_capabilities(&stream)?;
+
     let mut writer = FramedWriter::new(stream);
     writer.write_body(MessageType::DETACH, 0, &DetachRequest)?;
     writer.flush()?;
@@ -301,21 +358,29 @@ pub fn query_daemon_info(socket: impl AsRef<std::path::Path>) -> Result<DaemonIn
 
     let stream = UnixStream::connect(socket).map_err(ServerError::Connect)?;
     configure_daemon_control_stream(&stream)?;
+    exchange_daemon_capabilities(&stream)?;
+
     let reader_stream = stream.try_clone().map_err(ServerError::Connect)?;
     let mut writer = FramedWriter::new(stream);
     writer.write_body(MessageType::DAEMON_INFO_REQUEST, 0, &DaemonInfoRequest)?;
     writer.flush()?;
 
     let mut reader = FramedReader::new(reader_stream);
-    let frame = reader
-        .read_frame()?
-        .ok_or(ServerError::UnexpectedDaemonEof)?;
+    loop {
+        let frame = reader
+            .read_frame()?
+            .ok_or(ServerError::UnexpectedDaemonEof)?;
 
-    if frame.msg_type() != MessageType::DAEMON_INFO {
+        if frame.msg_type() == MessageType::DAEMON_INFO {
+            return Ok(frame.decode_body()?);
+        }
+
+        if frame.msg_type().name().is_none() {
+            continue;
+        }
+
         return Err(ServerError::UnexpectedMessage(frame.msg_type().get()));
     }
-
-    Ok(frame.decode_body()?)
 }
 
 #[cfg(unix)]
@@ -390,6 +455,7 @@ pub enum ServerError {
     SpawnDaemon(std::io::Error),
     WaitDaemonStarter(std::io::Error),
     ConfigureDaemonControl(std::io::Error),
+    NoSharedCapabilities,
     DaemonStarterFailed(Option<i32>),
     DaemonNotReady {
         path: std::path::PathBuf,
@@ -423,6 +489,7 @@ impl fmt::Display for ServerError {
             Self::ConfigureDaemonControl(err) => {
                 write!(f, "failed to configure daemon control socket: {err}")
             }
+            Self::NoSharedCapabilities => write!(f, "daemon has no shared protocol capabilities"),
             Self::DaemonStarterFailed(code) => {
                 write!(f, "daemon starter exited unsuccessfully")?;
                 if let Some(code) = code {
@@ -506,7 +573,10 @@ mod tests {
 
         let thread = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
+            let writer_stream = stream.try_clone().unwrap();
             let mut reader = FramedReader::new(stream);
+            answer_capability_exchange(&mut reader, writer_stream);
+
             let frame = reader.read_frame().unwrap().unwrap();
             assert_eq!(frame.msg_type(), MessageType::DETACH);
             let _: DetachRequest = frame.decode_body().unwrap();
@@ -527,6 +597,8 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let reader_stream = stream.try_clone().unwrap();
             let mut reader = FramedReader::new(reader_stream);
+            answer_capability_exchange(&mut reader, stream.try_clone().unwrap());
+
             let frame = reader.read_frame().unwrap().unwrap();
             assert_eq!(frame.msg_type(), MessageType::DAEMON_INFO_REQUEST);
             let _: DaemonInfoRequest = frame.decode_body().unwrap();
@@ -591,6 +663,69 @@ mod tests {
     }
 
     #[test]
+    fn broker_skips_unknown_message_before_request() {
+        let mut request = Vec::new();
+        {
+            let unknown =
+                crate::protocol::Frame::new(MessageType::new(250), 0, Vec::new()).unwrap();
+            unknown.write_to(&mut request).unwrap();
+
+            let mut writer = FramedWriter::new(&mut request);
+            writer
+                .write_body(
+                    MessageType::SESSION_LIST_REQUEST,
+                    0,
+                    &SessionListRequest {
+                        continue_after_response: false,
+                    },
+                )
+                .unwrap();
+        }
+
+        let mut response = Vec::new();
+        handle_broker_request(Cursor::new(request), &mut response, 4_294_967_295).unwrap();
+
+        let mut reader = FramedReader::new(response.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::SESSION_LIST);
+    }
+
+    #[test]
+    fn broker_replies_to_capability_exchange_then_continues() {
+        let mut request = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut request);
+            writer
+                .write_body(
+                    MessageType::CAPABILITIES,
+                    0,
+                    &Capabilities::default_supported(),
+                )
+                .unwrap();
+            writer
+                .write_body(
+                    MessageType::SESSION_LIST_REQUEST,
+                    0,
+                    &SessionListRequest {
+                        continue_after_response: false,
+                    },
+                )
+                .unwrap();
+        }
+
+        let mut response = Vec::new();
+        handle_broker_request(Cursor::new(request), &mut response, 4_294_967_295).unwrap();
+
+        let mut reader = FramedReader::new(response.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::CAPABILITIES);
+        let _: Capabilities = frame.decode_body().unwrap();
+
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::SESSION_LIST);
+    }
+
+    #[test]
     fn broker_new_session_rejects_wrong_uid() {
         let mut request = Vec::new();
         {
@@ -633,6 +768,8 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let reader_stream = stream.try_clone().unwrap();
             let mut reader = FramedReader::new(reader_stream);
+            answer_capability_exchange(&mut reader, stream.try_clone().unwrap());
+
             let frame = reader.read_frame().unwrap().unwrap();
             assert_eq!(frame.msg_type(), MessageType::BROKER_ATTACH);
             let _: BrokerAttachRequest = frame.decode_body().unwrap();
@@ -718,6 +855,8 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let reader_stream = stream.try_clone().unwrap();
             let mut reader = FramedReader::new(reader_stream);
+            answer_capability_exchange(&mut reader, stream.try_clone().unwrap());
+
             let frame = reader.read_frame().unwrap().unwrap();
             assert_eq!(frame.msg_type(), MessageType::BROKER_ATTACH);
 
@@ -788,6 +927,26 @@ mod tests {
         }
 
         Some(thread.join().ok().unwrap())
+    }
+
+    fn answer_capability_exchange<R, W>(reader: &mut FramedReader<R>, writer: W)
+    where
+        R: Read,
+        W: Write,
+    {
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::CAPABILITIES);
+        let _: Capabilities = frame.decode_body().unwrap();
+
+        let mut writer = FramedWriter::new(writer);
+        writer
+            .write_body(
+                MessageType::CAPABILITIES,
+                0,
+                &Capabilities::default_supported(),
+            )
+            .unwrap();
+        writer.flush().unwrap();
     }
 
     fn test_listener(name: &str) -> Option<(UnixListener, std::path::PathBuf)> {

@@ -100,6 +100,8 @@ ssh-obi/
 ├── LICENSE-MPL
 ├── README.md
 ├── bootstrap.sh                    # embedded into the client via include_str!
+├── build-docs.sh                   # builds mdBook and re-copies published artifacts into docs/
+├── build-release.sh                # builds release tarballs with cross-rs and tar
 └── src/
     ├── lib.rs                      # re-exports the modules below as the `ssh_obi` library crate
     ├── protocol.rs                 # wire protocol: framing, capability handshake, control messages
@@ -234,9 +236,9 @@ These are settled — please don't relitigate without discussion:
 
 Build `docs/` with `./build-docs.sh`, not by running `mdbook build` directly. mdBook overwrites `docs/` on every build, so `build-docs.sh` must copy every non-mdBook artifact needed by the published site after each build, including `bootstrap.sh`, `.nojekyll`, and any `release-<cargo target>.tar.gz` archives.
 
-Each tarball contains only `LICENSE-APACHE`, `LICENSE-MPL`, `ssh-obi`, and `ssh-obi-server`, except client-only targets where `ssh-obi-server` is omitted.
+Each tarball contains only `LICENSE-APACHE`, `LICENSE-MPL`, `ssh-obi`, and `ssh-obi-server`, except client-only targets where `ssh-obi-server` is omitted. Platform executable suffixes are kept, so the Windows client-only tarball contains `ssh-obi.exe`.
 
-After the implementation is otherwise complete, add `./build-release.sh`. It should build every listed target with cross-rs, stage only the license files plus the target binaries, and create the corresponding `release-<cargo target>.tar.gz` files with `tar`. `build-docs.sh` then copies those tarballs into `docs/` on every mdBook build.
+Build release archives with `./build-release.sh`. It builds every listed target with cross-rs, stages only the license files plus the target binaries, and creates the corresponding `release-<cargo target>.tar.gz` files with `tar` piped through `gzip`. `build-docs.sh` then copies those tarballs into `docs/` on every mdBook build.
 
 - `release-x86_64-unknown-linux-musl.tar.gz`
 - `release-x86_64-unknown-freebsd.tar.gz`
