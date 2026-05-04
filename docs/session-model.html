@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
+            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -198,6 +198,14 @@ attached, the session is busy.</p>
 session to detach its current client:</p>
 <pre><code class="language-sh">ssh-obi --detach --session ID user@host
 </code></pre>
+<p>On the server host itself, <code>ssh-obi-server --list</code> lists all alive sessions for
+the current Unix user. If it is run inside an <code>ssh-obi</code> session, that session is
+marked in the <code>CUR</code> column. If it is run outside an <code>ssh-obi</code> session, no
+session is marked current.</p>
+<p>During automatic reconnect, <code>ssh-obi</code> already knows the session it is trying to
+recover. If that session is still marked busy because the previous broker has
+not fully gone away, the reconnecting client asks the stale attached client to
+detach and then retries the attach.</p>
 <h2 id="detach"><a class="header" href="#detach">Detach</a></h2>
 <p>Detach means “drop the client, keep the shell”.</p>
 <p>When the network drops, the remote shell keeps running and waits for another
@@ -216,6 +224,9 @@ bytes are evicted.</p>
 <h2 id="reconnect-and-replay"><a class="header" href="#reconnect-and-replay">Reconnect And Replay</a></h2>
 <p>After the first attach, the client knows the session id. On an ambiguous
 disconnect, it starts a fresh SSH connection and requests that same session.</p>
+<p>If that reconnect attempt finds the session busy, the client sends a detach
+control request for the same session and retries. Manual first-time attaches
+still report a busy session rather than detaching another client automatically.</p>
 <p>The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.
 That is acceptable and expected.</p>

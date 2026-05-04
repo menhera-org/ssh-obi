@@ -21,14 +21,14 @@ panes, tabs, or in-band escape commands. If you want window management, run
 
 ## Status
 
-`ssh-obi` `v0.1.1` is the current release. It is available on crates.io,
-tagged as `v0.1.1` on GitHub, and distributed as release tarballs from
+`ssh-obi` `v0.1.2` is the current release. It is available on crates.io,
+tagged as `v0.1.2` on GitHub, and distributed as release tarballs from
 `https://obi.menhera.org/`.
 
-The `v0.1.1` release improves attach startup by sending the local terminal
-window size before the remote PTY is attached or created. It also recognizes
-remote server binaries installed by a distro package on `PATH` or by Cargo at
-`~/.cargo/bin/ssh-obi-server`.
+The `v0.1.2` release adds safer reconnect behavior for sessions whose previous
+client is still attached, explicit OpenBSD install guidance, and best-effort
+systemd cgroup separation for newly spawned PTY children on Linux. The `0.1`
+wire protocol baseline remains unchanged.
 
 The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.
@@ -51,6 +51,12 @@ List existing sessions without attaching:
 
 ```sh
 ssh-obi --list user@example.com
+```
+
+List sessions from inside the remote account:
+
+```sh
+ssh-obi-server --list
 ```
 
 Detach the currently attached client for a known session from your local

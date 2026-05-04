@@ -4,7 +4,7 @@
 
 The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
 
-**Status:** `v0.1.1` is the current release. It is published on crates.io and tagged on GitHub. The user-facing CLI and `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1` protocol capabilities remain the first released baseline; `initial-window-size.v1` is the first additive capability. Breaking protocol changes should use new capability names.
+**Status:** `v0.1.2` is the current release. It is published on crates.io and tagged on GitHub. The user-facing CLI and `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1` protocol capabilities remain the first released baseline; `initial-window-size.v1` is the first additive capability. Breaking protocol changes should use new capability names.
 
 ## What it is
 
@@ -26,11 +26,11 @@ The name is from obi (帯), the Japanese sash that holds a kimono together — f
 These clarify implementation choices that are easy to get subtly wrong:
 
 - **SSH transport uses the system `ssh` binary.** We rely on the file descriptors exposed by the locally executed `ssh` process for the single SSH connection. During bootstrap, the client does not send framed protocol bytes until the script has printed `OBI-SERVER-READY` and then `exec`'d `ssh-obi-server`; this avoids protocol bytes being consumed as shell-script input.
-- **No systemd assumption.** systemd-based systems are supported, but the daemon design is not systemd-based and does not assume `user@UID.service`, `systemd-run`, or linger setup. The server daemonizes itself and should be treated as a plain per-user daemon.
+- **No systemd assumption.** systemd-based systems are supported, but the daemon design is not systemd-based and does not assume `user@UID.service`, `systemd-run`, or linger setup. The server daemonizes itself and should be treated as a plain per-user daemon. On Linux with systemd and a user bus, newly spawned PTY children are best-effort moved into transient user scopes before exec, matching tmux >= 3.2-style cgroup detaching; failures fall back to the normal spawn path.
 - **Daemon socket requests are role-specific.** A session may have at most one attached broker, but the daemon must still accept non-broker control requests while busy. Listing/info probes and detach requests are valid even when a broker is attached.
 - **Replay may duplicate recent bytes.** Reattach replays the daemon's current bounded ring buffer, and duplicates are acceptable. The implementation does not track a per-client replay cursor.
 - **Initial window size is sent before attach.** When both sides support `initial-window-size.v1`, the client sends local terminal dimensions before `AttachSession` or `NewSession`. New sessions create the PTY with that size, and reattaches apply it before replay.
-- **Ambiguous disconnects reconnect first.** If the client loses the SSH/broker connection without a graceful `ClientShouldExit` or shell-exit report, it reconnects. If the session is then gone or cannot provide an exit status, the client fails rather than guessing success.
+- **Ambiguous disconnects reconnect first.** If the client loses the SSH/broker connection without a graceful `ClientShouldExit` or shell-exit report, it reconnects. If the target session is still busy because the stale broker has not gone away, the reconnecting client asks that attached client to detach and retries. If the session is gone or cannot provide an exit status, the client fails rather than guessing success.
 - **Foreground command detection is best-effort only.** The daemon must not interfere with the spawned shell to improve the `WHAT` column. POSIX-ish process-group/proc-table guessing is acceptable, and failure falls back to `(unknown)`.
 - **Windows is client-only.** The Windows build can run the local `ssh-obi` client and use the system `ssh` binary, but Windows is not a supported remote server platform. Windows Terminal or another console with Windows virtual terminal input support is recommended so arrows and other line-editing keys reach the remote shell correctly.
 
@@ -41,6 +41,11 @@ Three process roles on the remote:
 1. **Daemon** (`ssh-obi-server --daemon`) — owns one PTY master and one user shell. One daemon per session. Long-lived; daemonizes itself and is not managed through any required system service. Listens on a UNIX-domain socket at `/tmp/ssh-obi-<uid>/<session-id>.sock`. Tracks: init time, last-detach time, attached state, and the current foreground command on its PTY.
 2. **Broker** (`ssh-obi-server`, no flag) — short-lived, spawned by SSH inside the login session. Bridges SSH stdio ↔ a chosen daemon's UNIX socket. Dies when SSH disconnects; the daemon does not.
 3. **Detach helper** (`ssh-obi-server --detach`) — short-lived, run inside a remote session by the user. Reads `$SSH_OBI_SOCKET` from its environment, connects to the daemon as a control requester, sends `Detach`, exits.
+
+`ssh-obi-server --list` is a local control command for the server host. It
+enumerates alive sessions for the current Unix user, free or busy. When run
+inside an `ssh-obi` session, the current session is marked with `*`; outside an
+`ssh-obi` session, no row is marked current.
 
 ### Session selection on connect
 
@@ -71,6 +76,7 @@ A session is "free" when no broker is currently attached. Attached sessions are 
 - `ssh-obi --session ID user@host` — attach to a specific session ID.
 - `ssh-obi --list user@host` — print all sessions and exit without attaching. Busy sessions are marked busy.
 - `ssh-obi --detach --session ID user@host` — detach the attached client for a specific session and exit without attaching.
+- `ssh-obi-server --list` — list alive sessions directly on the server host, marking the current session when run inside one.
 
 When prompting interactively, free sessions are numbered and selectable. Busy sessions are shown for awareness but are unnumbered and unselectable. Sessions that have never detached display `-` in the `DETACH` column. Picker timestamps are rendered in the client's local time.
 
@@ -82,7 +88,7 @@ When the broker exits (network drop, or `ssh-obi-server --detach`), the daemon's
 
 The daemon **continues draining the PTY master fd at all times**, attached or not. This is not optional: if the daemon ever stops reading, the kernel's PTY buffer fills, and the shell blocks on its next `write()` — which would effectively pause every running process whose output reaches the terminal. So during detach, output is read continuously and appended to the same bounded ring buffer (default 64 KiB) used for replay. When the ring fills, oldest bytes are evicted. On reattach, the ring's current contents are replayed to the new broker, then live forwarding resumes.
 
-`ssh-obi-server --detach` differs from a network drop by sending a `Detach` control request to the daemon even though the broker is still attached. The daemon then sends `ClientShouldExit` to the broker before closing the broker connection. The client treats `ClientShouldExit` as graceful (status 0, no reconnect). All other disconnections hit the reconnect loop. Getting this asymmetry right is load-bearing.
+`ssh-obi-server --detach` differs from a network drop by sending a `Detach` control request to the daemon even though the broker is still attached. The daemon then sends `ClientShouldExit` to the broker before closing the broker connection. The client treats `ClientShouldExit` as graceful (status 0, no reconnect). All other disconnections hit the reconnect loop. During reconnect, a `SessionBusy` response for the known target session triggers a detach request to clear the stale attached client before retrying. Getting this asymmetry right is load-bearing.
 
 ### Shell exit
 
@@ -91,6 +97,8 @@ When the user's shell exits normally, the daemon catches SIGCHLD, forwards the e
 ### Reconnect resumption
 
 Reconnect is **byte-stream-based**, not screen-state-based. After the first attach, the client knows the authoritative session id from `AttachedSession`; on an ambiguous disconnect it starts a fresh SSH/broker connection and requests that same session id. The new broker reattaches, the daemon replays the current ring contents and then resumes live forwarding. This can duplicate output the client already displayed before the disconnect; duplicates are acceptable. Anything older than the ring is gone — the client's terminal scrollback already has it. We do not maintain any states about terminal screens or per-client replay cursors.
+
+If the reconnect attempt reaches the daemon but gets `SessionBusy` for that same known session, the client sends a detach control request for the session and retries. First-time manual attaches still treat `SessionBusy` as a normal error and do not detach another active client automatically.
 
 ## Project layout
 
@@ -112,6 +120,7 @@ ssh-obi/
     ├── session.rs                  # session id, listing, picker logic, on-remote enumeration
     ├── foreground.rs               # best-effort WHAT lookup from PTY foreground process group
     ├── pty.rs                      # PTY open, child spawn, winsize
+    ├── systemd.rs                  # Linux-only best-effort transient scope setup for PTY children
     ├── terminal.rs                 # local raw-mode guard
     ├── transport.rs                # framed I/O over std::io::Read + std::io::Write
     ├── daemon.rs                   # double-fork + setsid + chdir + umask + stdio redirect; replay ring
@@ -210,14 +219,14 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 Cargo binary auto-discovery is disabled. `ssh-obi` is always declared, while `ssh-obi-server` requires the explicit `server-bin` feature so Windows `--bins` builds only the client. Unix release/dev commands that need the server binary must pass `--features server-bin`.
 
 For remote platforms without a published tarball, install the server in the
-remote account with `cargo install ssh-obi --features server-bin` or a distro
+remote account with `cargo install --features server-bin ssh-obi` or a distro
 package. The bootstrap checks both `~/.cargo/bin/ssh-obi-server` and
 `ssh-obi-server` on `PATH` before trying the built-in tarball install.
 
 ## Platform support
 
 - **Linux:** primary target. systemd-based and non-systemd distributions are supported, but systemd is not part of the required design. The daemon uses ordinary daemonization and should not require a system-wide service, setuid helper, or user service manager.
-- **macOS, FreeBSD, OpenBSD, NetBSD, illumos:** supported. Plain double-fork suffices. Some platforms, including OpenBSD, are supported through Cargo or distro-packaged server installs rather than prebuilt tarballs.
+- **macOS, FreeBSD, OpenBSD, NetBSD, illumos:** supported. Plain double-fork suffices. OpenBSD has no prebuilt release tarballs; install a Rust toolchain on the remote host and run `cargo install --features server-bin ssh-obi`, or use a distro-packaged server.
 - **Windows:** client-only. Running the server on Windows is out of scope.
 - **Android:** out of scope.
 
@@ -247,18 +256,18 @@ These are settled — please don't relitigate without discussion:
 - **Three modes for the server binary, dispatched in `main()`** by `--daemon` / `--detach` / no flag (broker default).
 - **Detach is out-of-band** via `$SSH_OBI_SESSION` and `$SSH_OBI_SOCKET` exported into the shell's environment. `ClientShouldExit` is the only signal the client treats as graceful (status 0, no reconnect); every other disconnect hits the reconnect loop.
 - **`SessionBusy` is the daemon-level broker-attach race arbiter.** Any second broker attach request whose first broker hasn't yet seen EOF is refused with `SessionBusy` and that requester is closed. Info/listing and detach control requests are allowed even while the session is busy. The picker's exclusion of attached sessions is UX layered on top; correctness comes from the daemon, not from coordinated clients. This means a brief window where two pickers see the same session as "free" cannot result in two clients sharing one PTY — at most one wins, the other gets a clear error.
+- **Reconnect may clear a stale busy client.** `SessionBusy` remains terminal for normal first-time attaches. In automatic reconnect, where the client already knows the authoritative target session, `SessionBusy` for that same session is treated as stale-client cleanup: the client sends a detach control request and retries the attach.
 - **Daemon never stops reading the PTY master.** Whether attached or detached, the read loop runs continuously and feeds the bounded ring buffer. Stopping reads would let the kernel's PTY buffer fill and block the shell's writes — which would silently freeze every process that prints to the terminal. This is non-negotiable; do not introduce conditional reading "to save CPU on long detaches."
 - **Shell exit terminates the session.** When the daemon's child shell exits (any cause: normal `exit`, `kill`, OOM, SIGSEGV), the daemon catches SIGCHLD, forwards the exit code and signal info through to any attached broker so the client can mirror them, unlinks its socket, and exits. The session is gone — next `ssh-obi user@host` will not see it in the picker.
 - **Socket location: `/tmp/ssh-obi-<uid>/<session-id>.sock`.** Per-user subdir created with mode 0700, ownership-checked on reuse. Stale sockets handled via `connect()`-then-`unlink()`-on-`ECONNREFUSED`. Refuses to start on NFS/CIFS/SMB. Validates path length under 100 bytes (macOS/BSD `sun_path` cap is 104).
 - **Wire protocol is forward-compatible by capability negotiation,** not version bumping. Once a capability ships, its message format is frozen forever. The only on-wire version number is `--protocol-check`, which gates binary compatibility of the framing/handshake layer.
-- **Auto-install over a single SSH invocation** via embedded `bootstrap.sh` passed as the remote command body. One auth round-trip total, even on first-ever connect to a remote. SSH stdin stays available for install confirmation and then the broker protocol. The client waits for the bootstrap marker before sending protocol bytes. Bootstrap writes shell rc files reachable from non-interactive SSH (`~/.bashrc`, `~/.zshenv`, fish `conf.d`), not login-only files.
+- **Auto-install over a single SSH invocation** via embedded `bootstrap.sh` passed as the remote command body. One auth round-trip total, even on first-ever connect to a remote. SSH stdin stays available for install confirmation and then the broker protocol. The client waits for the bootstrap marker before sending protocol bytes. Bootstrap writes shell rc files reachable from non-interactive SSH (`~/.bashrc`, `~/.zshenv`, fish `conf.d`), not login-only files. OpenBSD has no prebuilt tarball path; the bootstrap uses an existing compatible Cargo/PATH server or prints explicit Cargo install guidance.
 
 ## Changelog
 
-See [`CHANGELOG.md`](./CHANGELOG.md). In short, `v0.1.1` adds initial window
-size negotiation for attach/new-session startup and remote server discovery via
-`~/.cargo/bin/ssh-obi-server` or `PATH` for Cargo-installed and distro-packaged
-servers.
+See [`CHANGELOG.md`](./CHANGELOG.md). In short, `v0.1.2` adds Linux
+systemd-scope placement for PTY children when available, reconnect cleanup for
+stale attached clients, and explicit OpenBSD bootstrap guidance.
 
 ## mdBook-based obi.menhera.org site
 

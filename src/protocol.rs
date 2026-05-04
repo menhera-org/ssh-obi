@@ -197,7 +197,7 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<Option<Frame>, ProtocolErro
 }
 
 pub fn supports_protocol_baseline(baseline: &str) -> bool {
-    matches!(baseline, "0.1" | "0.1.0" | "0.1.1")
+    matches!(baseline, "0.1" | "0.1.0" | "0.1.1" | "0.1.2")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -435,5 +435,14 @@ mod tests {
             local.intersection(&peer),
             vec![CAP_PTY_V1.to_string(), CAP_EXIT_CODE_V1.to_string()]
         );
+    }
+
+    #[test]
+    fn protocol_check_accepts_compatible_0_1_releases() {
+        assert!(supports_protocol_baseline("0.1"));
+        assert!(supports_protocol_baseline("0.1.0"));
+        assert!(supports_protocol_baseline("0.1.1"));
+        assert!(supports_protocol_baseline("0.1.2"));
+        assert!(!supports_protocol_baseline("0.2"));
     }
 }

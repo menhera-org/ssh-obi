@@ -3,19 +3,22 @@ use std::process::ExitCode;
 use clap::Parser;
 use ssh_obi::daemon::run_daemon;
 use ssh_obi::protocol::{WindowSize, supports_protocol_baseline};
-use ssh_obi::server::{detach_from_env, run_broker_stdio};
+use ssh_obi::server::{detach_from_env, list_local_sessions, run_broker_stdio};
 use ssh_obi::session::{SessionId, generate_session_id};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 struct Args {
-    #[arg(long, conflicts_with_all = ["detach", "protocol_check"])]
+    #[arg(long, conflicts_with_all = ["detach", "list", "protocol_check"])]
     daemon: bool,
 
-    #[arg(long, conflicts_with_all = ["daemon", "protocol_check"])]
+    #[arg(long, conflicts_with_all = ["daemon", "list", "protocol_check"])]
     detach: bool,
 
-    #[arg(long = "protocol-check", value_name = "BASELINE", conflicts_with_all = ["daemon", "detach"])]
+    #[arg(long, conflicts_with_all = ["daemon", "detach", "protocol_check"])]
+    list: bool,
+
+    #[arg(long = "protocol-check", value_name = "BASELINE", conflicts_with_all = ["daemon", "detach", "list"])]
     protocol_check: Option<String>,
 
     #[arg(long, value_name = "ID", requires = "daemon")]
@@ -91,6 +94,19 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
         return ExitCode::SUCCESS;
+    }
+
+    if args.list {
+        match list_local_sessions() {
+            Ok(table) => {
+                print!("{table}");
+                return ExitCode::SUCCESS;
+            }
+            Err(err) => {
+                eprintln!("ssh-obi-server: list failed: {err}");
+                return ExitCode::from(1);
+            }
+        }
     }
 
     if let Err(err) = run_broker_stdio() {

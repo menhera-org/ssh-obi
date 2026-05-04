@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
+            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -186,7 +186,7 @@ for that OS/CPU pair.</p>
 list.</p>
 <p>If the platform can build Rust code, install the server on the remote account
 instead:</p>
-<pre><code class="language-sh">cargo install ssh-obi --features server-bin
+<pre><code class="language-sh">cargo install --features server-bin ssh-obi
 </code></pre>
 <p>The bootstrap probes <code>~/.cargo/bin/ssh-obi-server</code> directly and also accepts a
 compatible <code>ssh-obi-server</code> on <code>PATH</code>, so Cargo-installed and distro-packaged
@@ -222,6 +222,9 @@ scrollback.</p>
 <h2 id="a-session-is-busy"><a class="header" href="#a-session-is-busy">A session is busy</a></h2>
 <p>A session can have only one attached client. If another client is already
 attached, a second attach attempt gets <code>SessionBusy</code>.</p>
+<p>During automatic reconnect, <code>ssh-obi</code> treats <code>SessionBusy</code> specially only for
+the exact session it is trying to recover: it asks the stale attached client to
+detach and then retries. Manual attaches still leave the busy session alone.</p>
 <p>Use:</p>
 <pre><code class="language-sh">ssh-obi --list user@example.com
 </code></pre>

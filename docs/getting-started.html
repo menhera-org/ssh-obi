@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
+            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -219,6 +219,8 @@ different: the client treats that as ambiguous and attempts to reconnect.</p>
 <p>After the first successful attach, the client knows the session id. If the SSH
 connection disappears without a graceful detach or shell exit report, the
 client reconnects and asks for the same session.</p>
+<p>If the old broker is still attached when reconnect starts, the reconnecting
+client asks that stale client to detach and then retries the attach.</p>
 <p>On reattach, recent output is replayed first, then live forwarding resumes. The
 replay buffer is bounded, so old history belongs in your local terminal
 scrollback.</p>

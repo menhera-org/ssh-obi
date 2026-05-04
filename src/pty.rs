@@ -69,11 +69,15 @@ pub fn spawn_pty_command(
     let termios = interactive_termios()?;
     let winsize = size.map(to_nix_winsize);
     // SAFETY: forkpty is called before this function starts any threads. The child branch only
-    // applies prebuilt environment overrides, invokes execvp with prebuilt C strings, then _exit
-    // if setup or exec fails.
+    // performs best-effort systemd cgroup setup on Linux, applies prebuilt environment overrides,
+    // invokes execvp with prebuilt C strings, then _exit if setup or exec fails.
     match unsafe { nix::pty::forkpty(winsize.as_ref(), Some(&termios)) }.map_err(PtyError::Fork)? {
         ForkptyResult::Parent { child, master } => Ok(PtyChild { master, child }),
         ForkptyResult::Child => {
+            #[cfg(target_os = "linux")]
+            {
+                let _ = crate::systemd::move_pid_to_new_scope(unsafe { nix::libc::getpid() });
+            }
             if let Some(cwd) = &cwd
                 && unsafe { nix::libc::chdir(cwd.as_ptr()) } != 0
             {

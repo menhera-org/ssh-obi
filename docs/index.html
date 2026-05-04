@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
+            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -192,13 +192,13 @@ use.</li>
 panes, tabs, or in-band escape commands. If you want window management, run
 <code>tmux</code> or another multiplexer inside the remote shell.</p>
 <h2 id="status"><a class="header" href="#status">Status</a></h2>
-<p><code>ssh-obi</code> <code>v0.1.1</code> is the current release. It is available on crates.io,
-tagged as <code>v0.1.1</code> on GitHub, and distributed as release tarballs from
+<p><code>ssh-obi</code> <code>v0.1.2</code> is the current release. It is available on crates.io,
+tagged as <code>v0.1.2</code> on GitHub, and distributed as release tarballs from
 <code>https://obi.menhera.org/</code>.</p>
-<p>The <code>v0.1.1</code> release improves attach startup by sending the local terminal
-window size before the remote PTY is attached or created. It also recognizes
-remote server binaries installed by a distro package on <code>PATH</code> or by Cargo at
-<code>~/.cargo/bin/ssh-obi-server</code>.</p>
+<p>The <code>v0.1.2</code> release adds safer reconnect behavior for sessions whose previous
+client is still attached, explicit OpenBSD install guidance, and best-effort
+systemd cgroup separation for newly spawned PTY children on Linux. The <code>0.1</code>
+wire protocol baseline remains unchanged.</p>
 <p>The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
 <h2 id="quick-examples"><a class="header" href="#quick-examples">Quick Examples</a></h2>
@@ -210,6 +210,9 @@ bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
 </code></pre>
 <p>List existing sessions without attaching:</p>
 <pre><code class="language-sh">ssh-obi --list user@example.com
+</code></pre>
+<p>List sessions from inside the remote account:</p>
+<pre><code class="language-sh">ssh-obi-server --list
 </code></pre>
 <p>Detach the currently attached client for a known session from your local
 machine:</p>

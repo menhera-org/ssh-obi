@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.1.2
+
+Released for the `0.1.x` protocol line.
+
+### Added
+
+- On Linux systems booted with systemd and a user bus, newly spawned PTY
+  children are moved into a transient user scope before exec. This follows the
+  same systemd `StartTransientUnit` shape used by tmux >= 3.2 for cgroup
+  detaching, and falls back cleanly when systemd is unavailable.
+- During automatic reconnect, if the target session still reports
+  `SessionBusy`, the client asks the stale attached client to detach and then
+  retries the reconnect.
+- The Unix bootstrap reports an explicit OpenBSD message when no compatible
+  server is already installed. OpenBSD has no prebuilt release tarballs; install
+  a Rust toolchain and run `cargo install --features server-bin ssh-obi`.
+- `ssh-obi-server --list` lists currently alive sessions for the remote user on
+  the server host, including busy sessions and a marker for the current session
+  when run inside an `ssh-obi` session.
+
+### Fixed
+
+- OpenBSD install-only bootstrap runs now complete successfully when a
+  compatible `ssh-obi-server` already exists at
+  `~/.cargo/bin/ssh-obi-server` or on `PATH`.
+
+### Notes
+
+- The protocol baseline remains `0.1`.
+- Non-systemd Linux systems and non-Linux Unix systems do not require any
+  systemd tooling.
+
 ## v0.1.1
 
 Released for the `0.1.x` protocol line.

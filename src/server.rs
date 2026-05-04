@@ -20,6 +20,8 @@ use crate::protocol::{
 };
 use crate::session::{SessionIdError, SocketPathError, socket_dir_for_uid, socket_path_for_uid};
 #[cfg(unix)]
+use crate::session::{SessionInfo, render_session_list_table};
+#[cfg(unix)]
 use crate::session::{
     generate_session_id, list_session_socket_ids, remove_stale_socket, socket_path,
 };
@@ -39,6 +41,11 @@ pub fn run_broker_stdio() -> Result<(), ServerError> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     handle_broker_request(stdin, stdout, current_uid())
+}
+
+pub fn list_local_sessions() -> Result<String, ServerError> {
+    let current_session_id = env::var(ENV_SESSION).ok();
+    list_local_sessions_for_uid(current_uid(), current_session_id.as_deref())
 }
 
 pub fn handle_broker_request<R, W>(reader: R, writer: W, uid: u32) -> Result<(), ServerError>
@@ -179,6 +186,36 @@ fn current_uid() -> u32 {
 #[cfg(not(unix))]
 fn current_uid() -> u32 {
     0
+}
+
+#[cfg(unix)]
+fn list_local_sessions_for_uid(
+    uid: u32,
+    current_session_id: Option<&str>,
+) -> Result<String, ServerError> {
+    list_local_sessions_in_dir(socket_dir_for_uid(uid), current_session_id)
+}
+
+#[cfg(unix)]
+fn list_local_sessions_in_dir(
+    socket_dir: impl AsRef<Path>,
+    current_session_id: Option<&str>,
+) -> Result<String, ServerError> {
+    let sessions = enumerate_daemons(socket_dir)?
+        .into_iter()
+        .map(|info| SessionInfo::from_record(info.session))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(render_session_list_table(&sessions, current_session_id))
+}
+
+#[cfg(not(unix))]
+fn list_local_sessions_for_uid(
+    _uid: u32,
+    _current_session_id: Option<&str>,
+) -> Result<String, ServerError> {
+    Err(ServerError::UnsupportedPlatform(
+        "server session listing requires Unix-domain sockets",
+    ))
 }
 
 #[cfg(unix)]
@@ -675,6 +712,50 @@ mod tests {
     }
 
     #[test]
+    fn list_local_sessions_marks_current_session() {
+        let socket_dir = test_socket_dir("list-local-sessions");
+        fs::create_dir_all(&socket_dir).unwrap();
+
+        let Some(first) = spawn_info_daemon(&socket_dir, "laaaaaaa", false) else {
+            let _ = fs::remove_dir_all(&socket_dir);
+            return;
+        };
+        let Some(second) = spawn_info_daemon(&socket_dir, "lbbbbbbb", true) else {
+            let _ = fs::remove_dir_all(&socket_dir);
+            return;
+        };
+
+        let table = list_local_sessions_in_dir(&socket_dir, Some("lbbbbbbb")).unwrap();
+
+        assert!(table.contains("CUR  STATE  ID"));
+        assert!(table.contains("     free   laaaaaaa"));
+        assert!(table.contains(" *   busy   lbbbbbbb"));
+
+        first.join().unwrap();
+        second.join().unwrap();
+        let _ = fs::remove_dir_all(&socket_dir);
+    }
+
+    #[test]
+    fn list_local_sessions_can_leave_current_unmarked() {
+        let socket_dir = test_socket_dir("list-local-sessions-unmarked");
+        fs::create_dir_all(&socket_dir).unwrap();
+
+        let Some(daemon) = spawn_info_daemon(&socket_dir, "lccccccc", false) else {
+            let _ = fs::remove_dir_all(&socket_dir);
+            return;
+        };
+
+        let table = list_local_sessions_in_dir(&socket_dir, None).unwrap();
+
+        assert!(table.contains("     free   lccccccc"));
+        assert!(!table.contains(" *   free"));
+
+        daemon.join().unwrap();
+        let _ = fs::remove_dir_all(&socket_dir);
+    }
+
+    #[test]
     fn broker_list_request_returns_session_list() {
         let mut request = Vec::new();
         {
@@ -1051,6 +1132,58 @@ mod tests {
         }
 
         Some(thread.join().ok().unwrap())
+    }
+
+    fn spawn_info_daemon(
+        socket_dir: &std::path::Path,
+        session_id: &'static str,
+        attached: bool,
+    ) -> Option<thread::JoinHandle<()>> {
+        let path = socket_path(socket_dir, session_id).unwrap();
+        let _ = fs::remove_file(&path);
+        let listener = match UnixListener::bind(&path) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping Unix socket test because bind is not permitted here");
+                return None;
+            }
+            Err(err) => panic!("failed to bind test Unix socket: {err}"),
+        };
+
+        Some(thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let reader_stream = stream.try_clone().unwrap();
+            let mut reader = FramedReader::new(reader_stream);
+            answer_capability_exchange(&mut reader, stream.try_clone().unwrap());
+
+            let frame = reader.read_frame().unwrap().unwrap();
+            assert_eq!(frame.msg_type(), MessageType::DAEMON_INFO_REQUEST);
+            let _: DaemonInfoRequest = frame.decode_body().unwrap();
+
+            let response = DaemonInfo {
+                session: SessionRecord {
+                    session_id: session_id.to_string(),
+                    init_time: UnixTimeMillis(1_000),
+                    last_detach_time: None,
+                    current_command: "bash".to_string(),
+                    attached,
+                },
+            };
+            let mut writer = FramedWriter::new(stream);
+            writer
+                .write_body(MessageType::DAEMON_INFO, 0, &response)
+                .unwrap();
+            writer.flush().unwrap();
+        }))
+    }
+
+    fn test_socket_dir(name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            % 1_000_000;
+        std::env::temp_dir().join(format!("obi-{}-{name}-{unique}", std::process::id()))
     }
 
     fn answer_capability_exchange<R, W>(reader: &mut FramedReader<R>, writer: W)

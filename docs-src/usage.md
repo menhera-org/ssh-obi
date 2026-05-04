@@ -26,6 +26,12 @@ List sessions and exit:
 ssh-obi --list user@example.com
 ```
 
+List sessions directly on the server host:
+
+```sh
+ssh-obi-server --list
+```
+
 Detach the attached client for a specific session and exit:
 
 ```sh
@@ -83,6 +89,12 @@ Columns:
 
 The `WHAT` column is only a hint.
 
+`ssh-obi-server --list` is the local server-host equivalent. It lists all alive
+sessions for the current remote user, free or busy, and includes session IDs.
+When run from inside an `ssh-obi` session, the current session is marked with
+`*` in the `CUR` column. When run outside an `ssh-obi` session, no row is
+marked current.
+
 ## When The Remote Shell Exits
 
 If the remote shell exits while attached, the local client mirrors the exit
@@ -91,6 +103,11 @@ status where possible.
 If the connection is lost before the client receives a shell-exit report, the
 client reconnects first. If the session is gone or no exit status can be
 recovered, the client reports failure rather than guessing success.
+
+When an automatic reconnect targets a known session and that session still
+reports an attached client, `ssh-obi` sends a detach request for that same
+session and retries the attach. Normal first-time attach attempts do not detach
+busy sessions automatically.
 
 A deliberate detach through `ssh-obi-server --detach` is graceful. The client
 exits with status 0 and does not reconnect.

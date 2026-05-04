@@ -68,6 +68,9 @@ After the first successful attach, the client knows the session id. If the SSH
 connection disappears without a graceful detach or shell exit report, the
 client reconnects and asks for the same session.
 
+If the old broker is still attached when reconnect starts, the reconnecting
+client asks that stale client to detach and then retries the attach.
+
 On reattach, recent output is replayed first, then live forwarding resumes. The
 replay buffer is bounded, so old history belongs in your local terminal
 scrollback.

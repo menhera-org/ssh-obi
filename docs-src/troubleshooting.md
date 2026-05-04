@@ -18,7 +18,7 @@ If the platform can build Rust code, install the server on the remote account
 instead:
 
 ```sh
-cargo install ssh-obi --features server-bin
+cargo install --features server-bin ssh-obi
 ```
 
 The bootstrap probes `~/.cargo/bin/ssh-obi-server` directly and also accepts a
@@ -75,6 +75,10 @@ scrollback.
 
 A session can have only one attached client. If another client is already
 attached, a second attach attempt gets `SessionBusy`.
+
+During automatic reconnect, `ssh-obi` treats `SessionBusy` specially only for
+the exact session it is trying to recover: it asks the stale attached client to
+detach and then retries. Manual attaches still leave the busy session alone.
 
 Use:
 

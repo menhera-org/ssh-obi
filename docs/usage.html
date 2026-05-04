@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
+            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -188,6 +188,9 @@
 <p>List sessions and exit:</p>
 <pre><code class="language-sh">ssh-obi --list user@example.com
 </code></pre>
+<p>List sessions directly on the server host:</p>
+<pre><code class="language-sh">ssh-obi-server --list
+</code></pre>
 <p>Detach the attached client for a specific session and exit:</p>
 <pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
 </code></pre>
@@ -227,12 +230,21 @@ are not assigned picker numbers.</p>
 <li><code>WHAT</code>: best-effort foreground command detected for the session.</li>
 </ul>
 <p>The <code>WHAT</code> column is only a hint.</p>
+<p><code>ssh-obi-server --list</code> is the local server-host equivalent. It lists all alive
+sessions for the current remote user, free or busy, and includes session IDs.
+When run from inside an <code>ssh-obi</code> session, the current session is marked with
+<code>*</code> in the <code>CUR</code> column. When run outside an <code>ssh-obi</code> session, no row is
+marked current.</p>
 <h2 id="when-the-remote-shell-exits"><a class="header" href="#when-the-remote-shell-exits">When The Remote Shell Exits</a></h2>
 <p>If the remote shell exits while attached, the local client mirrors the exit
 status where possible.</p>
 <p>If the connection is lost before the client receives a shell-exit report, the
 client reconnects first. If the session is gone or no exit status can be
 recovered, the client reports failure rather than guessing success.</p>
+<p>When an automatic reconnect targets a known session and that session still
+reports an attached client, <code>ssh-obi</code> sends a detach request for that same
+session and retries the attach. Normal first-time attach attempts do not detach
+busy sessions automatically.</p>
 <p>A deliberate detach through <code>ssh-obi-server --detach</code> is graceful. The client
 exits with status 0 and does not reconnect.</p>
 

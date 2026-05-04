@@ -52,6 +52,32 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
 
         match result {
             Ok(success) => return Ok(success.exit_code),
+            Err(failure)
+                if reconnect_busy_session(
+                    &failure.error,
+                    known_session_id.as_deref(),
+                    reconnecting,
+                )
+                .is_some() =>
+            {
+                let session_id =
+                    reconnect_busy_session(&failure.error, known_session_id.as_deref(), true)
+                        .expect("guard matched reconnect busy session");
+                eprintln!(
+                    "ssh-obi: session {session_id} still has an attached client; requesting detach"
+                );
+                detach_stale_client_for_reconnect(args, &session_id).map_err(|source| {
+                    ClientRunError::ReconnectFailed {
+                        session_id: session_id.clone(),
+                        source: Box::new(source),
+                    }
+                })?;
+                thread::sleep(RECONNECT_DELAY);
+
+                next_args = args.clone();
+                next_args.action = ClientAction::Attach;
+                next_args.session = Some(session_id);
+            }
             Err(failure) if is_ambiguous_disconnect(&failure.error) => {
                 let reached_attached_session = failure.confirmed_session_id.is_some();
                 let Some(session_id) = failure
@@ -81,6 +107,43 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
             }
             Err(failure) => return Err(failure.error),
         }
+    }
+}
+
+fn detach_stale_client_for_reconnect(
+    args: &ClientArgs,
+    session_id: &str,
+) -> Result<(), ClientRunError> {
+    let detach_args = reconnect_detach_args(args, session_id);
+    let mut attached_io = None;
+
+    match run_client_attempt(&detach_args, &mut attached_io, 0)? {
+        ClientAttemptResult::Control(code) if code == ExitCode::SUCCESS => Ok(()),
+        ClientAttemptResult::Control(_) => Err(ClientRunError::ReconnectDetachFailed),
+        ClientAttemptResult::Attached(_) => unreachable!("detach action attached"),
+    }
+}
+
+fn reconnect_detach_args(args: &ClientArgs, session_id: &str) -> ClientArgs {
+    let mut detach_args = args.clone();
+    detach_args.action = ClientAction::Detach;
+    detach_args.session = Some(session_id.to_string());
+    detach_args
+}
+
+fn reconnect_busy_session(
+    error: &ClientRunError,
+    known_session_id: Option<&str>,
+    reconnecting: bool,
+) -> Option<String> {
+    let ClientRunError::SessionBusy(session_id) = error else {
+        return None;
+    };
+
+    if reconnecting && known_session_id == Some(session_id.as_str()) {
+        Some(session_id.clone())
+    } else {
+        None
     }
 }
 
@@ -1063,6 +1126,7 @@ pub enum ClientRunError {
         session_id: String,
         source: Box<ClientRunError>,
     },
+    ReconnectDetachFailed,
     Protocol(ProtocolError),
     InvalidSession(SessionIdError),
     InvalidSessionSelection(String),
@@ -1113,6 +1177,10 @@ impl fmt::Display for ClientRunError {
             Self::ReconnectFailed { session_id, source } => {
                 write!(f, "failed to reconnect session {session_id}: {source}")
             }
+            Self::ReconnectDetachFailed => write!(
+                f,
+                "failed to ask the stale attached client to detach during reconnect"
+            ),
             Self::Protocol(err) => write!(f, "protocol error: {err}"),
             Self::InvalidSession(err) => write!(f, "invalid session from broker: {err}"),
             Self::InvalidSessionSelection(selection) => {
@@ -1290,6 +1358,40 @@ mod tests {
         assert_eq!(frame.msg_type(), MessageType::ATTACH_SESSION);
         let request: AttachSessionRequest = frame.decode_body().unwrap();
         assert_eq!(request.session_id, "aaaaaaaa");
+    }
+
+    #[test]
+    fn reconnect_detach_args_preserve_destination_and_target_session() {
+        let mut args = args(ClientAction::Attach);
+        args.session = Some("oldoldold".to_string());
+        args.ssh_args = vec![OsString::from("-p"), OsString::from("2222")];
+
+        let detach_args = reconnect_detach_args(&args, "aaaaaaaa");
+
+        assert!(matches!(detach_args.action, ClientAction::Detach));
+        assert_eq!(detach_args.session.as_deref(), Some("aaaaaaaa"));
+        assert_eq!(detach_args.destination, OsString::from("host"));
+        assert_eq!(
+            detach_args.ssh_args,
+            vec![OsString::from("-p"), OsString::from("2222")]
+        );
+    }
+
+    #[test]
+    fn reconnect_busy_session_only_matches_known_reconnect_target() {
+        let busy = ClientRunError::SessionBusy("aaaaaaaa".to_string());
+
+        assert_eq!(
+            reconnect_busy_session(&busy, Some("aaaaaaaa"), true).as_deref(),
+            Some("aaaaaaaa")
+        );
+        assert!(reconnect_busy_session(&busy, Some("aaaaaaaa"), false).is_none());
+        assert!(reconnect_busy_session(&busy, Some("bbbbbbbb"), true).is_none());
+        assert!(reconnect_busy_session(&busy, None, true).is_none());
+        assert!(
+            reconnect_busy_session(&ClientRunError::UnexpectedBrokerEof, Some("aaaaaaaa"), true)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1478,5 +1580,33 @@ mod tests {
 
         assert_eq!(result.confirmed_session_id.as_deref(), Some("bbbbbbbb"));
         assert!(matches!(result.error, ClientRunError::UnexpectedBrokerEof));
+    }
+
+    #[test]
+    fn attached_session_reports_session_busy() {
+        let mut input = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut input);
+            writer
+                .write_body(
+                    MessageType::SESSION_BUSY,
+                    0,
+                    &SessionBusy {
+                        session_id: "aaaaaaaa".to_string(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let attached_io = attached_io_for_test();
+        let result =
+            run_attached_session(Cursor::new(input), Vec::<u8>::new(), None, &attached_io, 1)
+                .unwrap_err();
+
+        assert!(result.confirmed_session_id.is_none());
+        assert!(matches!(
+            result.error,
+            ClientRunError::SessionBusy(session_id) if session_id == "aaaaaaaa"
+        ));
     }
 }

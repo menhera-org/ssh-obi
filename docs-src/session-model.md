@@ -36,6 +36,16 @@ session to detach its current client:
 ssh-obi --detach --session ID user@host
 ```
 
+On the server host itself, `ssh-obi-server --list` lists all alive sessions for
+the current Unix user. If it is run inside an `ssh-obi` session, that session is
+marked in the `CUR` column. If it is run outside an `ssh-obi` session, no
+session is marked current.
+
+During automatic reconnect, `ssh-obi` already knows the session it is trying to
+recover. If that session is still marked busy because the previous broker has
+not fully gone away, the reconnecting client asks the stale attached client to
+detach and then retries the attach.
+
 ## Detach
 
 Detach means "drop the client, keep the shell".
@@ -67,6 +77,10 @@ bytes are evicted.
 
 After the first attach, the client knows the session id. On an ambiguous
 disconnect, it starts a fresh SSH connection and requests that same session.
+
+If that reconnect attempt finds the session busy, the client sends a detach
+control request for the same session and retries. Manual first-time attaches
+still report a busy session rather than detaching another client automatically.
 
 The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.

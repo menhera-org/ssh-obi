@@ -524,6 +524,40 @@ pub fn render_session_table(sessions: &[SessionInfo], include_new: bool) -> Stri
     output
 }
 
+pub fn render_session_list_table(
+    sessions: &[SessionInfo],
+    current_session_id: Option<&str>,
+) -> String {
+    let mut output = String::new();
+    output.push_str("CUR  STATE  ID          INIT              DETACH            WHAT\n");
+
+    for session in sessions {
+        let current = if Some(session.id.as_str()) == current_session_id {
+            "*"
+        } else {
+            " "
+        };
+        let state = match session.state {
+            SessionState::Free => "free",
+            SessionState::Busy => "busy",
+        };
+        let detach_time = session
+            .last_detach_time
+            .map(display_time)
+            .unwrap_or_else(|| "-".to_string());
+
+        output.push_str(&format!(
+            " {current}   {state:<5}  {:<10}  {:<16}  {:<16}  {}\n",
+            session.id.as_str(),
+            display_time(session.init_time),
+            detach_time,
+            session.current_command
+        ));
+    }
+
+    output
+}
+
 fn display_time(time: SystemTime) -> String {
     let local: DateTime<Local> = time.into();
     local.format("%Y-%m-%d %H:%M").to_string()
@@ -593,6 +627,29 @@ mod tests {
         assert!(table.contains("  -   busy"));
         assert!(table.contains("  1   free"));
         assert!(table.contains("  n   new"));
+    }
+
+    #[test]
+    fn session_list_table_marks_current_session_and_includes_ids() {
+        let table = render_session_list_table(
+            &[
+                session("aaaaaaaa", SessionState::Busy),
+                session("bbbbbbbb", SessionState::Free),
+            ],
+            Some("aaaaaaaa"),
+        );
+
+        assert!(table.contains("CUR  STATE  ID"));
+        assert!(table.contains(" *   busy   aaaaaaaa"));
+        assert!(table.contains("     free   bbbbbbbb"));
+    }
+
+    #[test]
+    fn session_list_table_can_leave_current_unmarked() {
+        let table = render_session_list_table(&[session("aaaaaaaa", SessionState::Free)], None);
+
+        assert!(table.contains("     free   aaaaaaaa"));
+        assert!(!table.contains(" *   free"));
     }
 
     #[test]

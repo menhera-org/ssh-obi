@@ -163,6 +163,127 @@ mod tests {
         assert!(stdout.contains("PATH-SERVER --probe\n"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn embedded_script_warns_openbsd_during_install_only() {
+        let root = openbsd_uname_test_root("install-only");
+        let home = root.join("home");
+        let bin = root.join("bin");
+        make_fake_openbsd_uname(&bin);
+        std::fs::create_dir_all(&home).unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg("sh")
+            .arg("--install")
+            .env("HOME", &home)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries."));
+        assert!(stdout.contains("cargo install --features server-bin ssh-obi"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_script_openbsd_install_only_accepts_cargo_server() {
+        let root = openbsd_uname_test_root("install-only-cargo");
+        let home = root.join("home");
+        let bin = root.join("bin");
+        let cargo_bin = home.join(".cargo").join("bin");
+        make_fake_openbsd_uname(&bin);
+        make_fake_protocol_server(&cargo_bin.join("ssh-obi-server"), "CARGO-SERVER");
+
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg("sh")
+            .arg("--install")
+            .env("HOME", &home)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OBI-INSTALL-COMPLETE\n"));
+        assert!(!stdout.contains("OBI-ERROR OpenBSD"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_script_openbsd_install_only_accepts_path_server() {
+        let root = openbsd_uname_test_root("install-only-path");
+        let home = root.join("home");
+        let bin = root.join("bin");
+        make_fake_openbsd_uname(&bin);
+        make_fake_protocol_server(&bin.join("ssh-obi-server"), "PATH-SERVER");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg("sh")
+            .arg("--install")
+            .env("HOME", &home)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OBI-INSTALL-COMPLETE\n"));
+        assert!(!stdout.contains("OBI-ERROR OpenBSD"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_script_warns_openbsd_after_auto_install_confirmation() {
+        let root = openbsd_uname_test_root("auto-install");
+        let home = root.join("home");
+        let bin = root.join("bin");
+        make_fake_openbsd_uname(&bin);
+        std::fs::create_dir_all(&home).unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg("sh")
+            .arg("0.1")
+            .arg("--probe")
+            .env("HOME", &home)
+            .env("PATH", path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        {
+            use std::io::Write;
+
+            let stdin = child.stdin.as_mut().unwrap();
+            writeln!(stdin, "OBI-INSTALL-OK").unwrap();
+        }
+        let output = child.wait_with_output().unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OBI-INSTALL-REQUIRED\n"));
+        assert!(stdout.contains("OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries."));
+        assert!(stdout.contains("cargo install --features server-bin ssh-obi"));
+    }
+
     #[test]
     fn remote_command_runs_stdin_script_with_baseline() {
         let command = remote_shell_command(&[], "xterm-256color");
@@ -187,5 +308,52 @@ mod tests {
         assert!(!is_useful_term(""));
         assert!(!is_useful_term("dumb"));
         assert!(is_useful_term("xterm-256color"));
+    }
+
+    #[cfg(unix)]
+    fn openbsd_uname_test_root(name: &str) -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "ssh-obi-bootstrap-openbsd-{name}-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    #[cfg(unix)]
+    fn make_fake_openbsd_uname(bin: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::create_dir_all(bin).unwrap();
+        let uname = bin.join("uname");
+        std::fs::write(
+            &uname,
+            "#!/bin/sh\ncase \"$1\" in\n  -s) printf 'OpenBSD\\n' ;;\n  -m) printf 'amd64\\n' ;;\n  *) printf 'OpenBSD\\n' ;;\nesac\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&uname).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&uname, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn make_fake_protocol_server(path: &std::path::Path, name: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nprintf '{name} %s\\n' \"$*\"\n"
+            ),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
     }
 }

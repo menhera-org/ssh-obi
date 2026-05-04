@@ -32,7 +32,9 @@ Supported remote server platforms:
 The server component is not supported on Windows.
 
 systemd-based Linux distributions are supported, but systemd is not required.
-No system-wide service install is required.
+No system-wide service install is required. On Linux systems with systemd and a
+user bus, new PTY children are placed into a transient user scope on a
+best-effort basis; non-systemd Linux systems continue without that step.
 
 ## Downloads
 
@@ -43,6 +45,12 @@ such as OpenBSD, are intentionally supported through a locally installed
 `ssh-obi-server` rather than a prebuilt tarball. Install with Cargo or a distro
 package, then connect normally; the bootstrap will use a compatible server from
 `~/.cargo/bin/ssh-obi-server` or from `PATH`.
+
+OpenBSD has no prebuilt binaries. On OpenBSD, install a Rust toolchain and run:
+
+```sh
+cargo install --features server-bin ssh-obi
+```
 
 Server-capable tarballs:
 

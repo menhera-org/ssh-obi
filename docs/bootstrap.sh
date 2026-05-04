@@ -73,6 +73,18 @@ system="$(uname -s)"
 machine="$(uname -m)"
 
 case "${system}:${machine}" in
+    OpenBSD:*)
+        if [ "$server" != "" ]; then
+            if [ "$install_only" -eq 1 ]; then
+                printf '%s\n' 'OBI-INSTALL-COMPLETE'
+                exit 0
+            fi
+            printf '%s\n' 'OBI-SERVER-READY'
+            exec "$server" "$@"
+        fi
+        printf '%s\n' 'OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries. Install a Rust toolchain on the remote host, then run: cargo install --features server-bin ssh-obi'
+        exit 1
+        ;;
     Linux:x86_64 | Linux:amd64)
         target="x86_64-unknown-linux-musl"
         ;;

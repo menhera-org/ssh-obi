@@ -26,11 +26,21 @@ For remote platforms where no prebuilt server tarball is published, install a
 server-capable build in the remote account with:
 
 ```sh
-cargo install ssh-obi --features server-bin
+cargo install --features server-bin ssh-obi
 ```
 
 The attach bootstrap checks `~/.cargo/bin/ssh-obi-server` directly, so this
 works even when that directory is not on `PATH`.
+
+OpenBSD does not have prebuilt `ssh-obi` release tarballs. On OpenBSD remote
+hosts, install a Rust toolchain first, then run:
+
+```sh
+cargo install --features server-bin ssh-obi
+```
+
+After that, connect normally; the bootstrap will find the Cargo-installed
+`ssh-obi-server`.
 
 ## Unix Install
 
@@ -85,7 +95,7 @@ this order:
 3. `ssh-obi-server` found on `PATH`
 
 The `PATH` probe supports distro-packaged installs. The direct Cargo path
-supports remote platforms where `cargo install ssh-obi --features server-bin`
+supports remote platforms where `cargo install --features server-bin ssh-obi`
 is the practical server install path.
 
 ## Windows Client Install

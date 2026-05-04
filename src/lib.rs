@@ -8,5 +8,7 @@ pub mod protocol;
 pub mod pty;
 pub mod server;
 pub mod session;
+#[cfg(all(unix, target_os = "linux"))]
+pub(crate) mod systemd;
 pub mod terminal;
 pub mod transport;

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
+            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -175,9 +175,39 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="changelog"><a class="header" href="#changelog">Changelog</a></h1>
-<h2 id="v011"><a class="header" href="#v011">v0.1.1</a></h2>
+<h2 id="v012"><a class="header" href="#v012">v0.1.2</a></h2>
 <p>Released for the <code>0.1.x</code> protocol line.</p>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
+<ul>
+<li>On Linux systems booted with systemd and a user bus, newly spawned PTY
+children are moved into a transient user scope before exec. This follows the
+same systemd <code>StartTransientUnit</code> shape used by tmux &gt;= 3.2 for cgroup
+detaching, and falls back cleanly when systemd is unavailable.</li>
+<li>During automatic reconnect, if the target session still reports
+<code>SessionBusy</code>, the client asks the stale attached client to detach and then
+retries the reconnect.</li>
+<li>The Unix bootstrap reports an explicit OpenBSD message when no compatible
+server is already installed. OpenBSD has no prebuilt release tarballs; install
+a Rust toolchain and run <code>cargo install --features server-bin ssh-obi</code>.</li>
+<li><code>ssh-obi-server --list</code> lists currently alive sessions for the remote user on
+the server host, including busy sessions and a marker for the current session
+when run inside an <code>ssh-obi</code> session.</li>
+</ul>
+<h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
+<ul>
+<li>OpenBSD install-only bootstrap runs now complete successfully when a
+compatible <code>ssh-obi-server</code> already exists at
+<code>~/.cargo/bin/ssh-obi-server</code> or on <code>PATH</code>.</li>
+</ul>
+<h3 id="notes"><a class="header" href="#notes">Notes</a></h3>
+<ul>
+<li>The protocol baseline remains <code>0.1</code>.</li>
+<li>Non-systemd Linux systems and non-Linux Unix systems do not require any
+systemd tooling.</li>
+</ul>
+<h2 id="v011"><a class="header" href="#v011">v0.1.1</a></h2>
+<p>Released for the <code>0.1.x</code> protocol line.</p>
+<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
 <ul>
 <li>The client sends an initial terminal window size before attach and new-session
 requests when the remote server supports <code>initial-window-size.v1</code>.</li>
@@ -189,7 +219,7 @@ places before trying a tarball install:
 <code>~/.ssh-obi/bin/ssh-obi-server</code>, <code>~/.cargo/bin/ssh-obi-server</code>, and
 <code>ssh-obi-server</code> found on <code>PATH</code>.</li>
 </ul>
-<h3 id="notes"><a class="header" href="#notes">Notes</a></h3>
+<h3 id="notes-1"><a class="header" href="#notes-1">Notes</a></h3>
 <ul>
 <li>The protocol baseline remains <code>0.1</code>; <code>initial-window-size.v1</code> is negotiated as
 a capability.</li>
@@ -199,7 +229,7 @@ package.</li>
 </ul>
 <h2 id="v010"><a class="header" href="#v010">v0.1.0</a></h2>
 <p>Initial public release.</p>
-<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
+<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
 <ul>
 <li>Local <code>ssh-obi</code> client and Unix remote <code>ssh-obi-server</code>.</li>
 <li>Per-user long-lived remote sessions.</li>

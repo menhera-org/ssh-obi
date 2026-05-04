@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
+            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -191,10 +191,16 @@ server binary by default. For normal use, let the client bootstrap or update
 the remote server component when you connect.</p>
 <p>For remote platforms where no prebuilt server tarball is published, install a
 server-capable build in the remote account with:</p>
-<pre><code class="language-sh">cargo install ssh-obi --features server-bin
+<pre><code class="language-sh">cargo install --features server-bin ssh-obi
 </code></pre>
 <p>The attach bootstrap checks <code>~/.cargo/bin/ssh-obi-server</code> directly, so this
 works even when that directory is not on <code>PATH</code>.</p>
+<p>OpenBSD does not have prebuilt <code>ssh-obi</code> release tarballs. On OpenBSD remote
+hosts, install a Rust toolchain first, then run:</p>
+<pre><code class="language-sh">cargo install --features server-bin ssh-obi
+</code></pre>
+<p>After that, connect normally; the bootstrap will find the Cargo-installed
+<code>ssh-obi-server</code>.</p>
 <h2 id="unix-install"><a class="header" href="#unix-install">Unix Install</a></h2>
 <p>To preinstall or update a Unix-like account without starting a session:</p>
 <pre><code class="language-sh">wget -O - https://obi.menhera.org/bootstrap.sh | sh -s -- --install
@@ -236,7 +242,7 @@ this order:</p>
 <li><code>ssh-obi-server</code> found on <code>PATH</code></li>
 </ol>
 <p>The <code>PATH</code> probe supports distro-packaged installs. The direct Cargo path
-supports remote platforms where <code>cargo install ssh-obi --features server-bin</code>
+supports remote platforms where <code>cargo install --features server-bin ssh-obi</code>
 is the practical server install path.</p>
 <h2 id="windows-client-install"><a class="header" href="#windows-client-install">Windows Client Install</a></h2>
 <p>Windows can run the client only. It cannot run the remote server.</p>

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
+            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -202,7 +202,9 @@ installed with Cargo or a distro package.</li>
 </ul>
 <p>The server component is not supported on Windows.</p>
 <p>systemd-based Linux distributions are supported, but systemd is not required.
-No system-wide service install is required.</p>
+No system-wide service install is required. On Linux systems with systemd and a
+user bus, new PTY children are placed into a transient user scope on a
+best-effort basis; non-systemd Linux systems continue without that step.</p>
 <h2 id="downloads"><a class="header" href="#downloads">Downloads</a></h2>
 <p>Release files are served from <code>https://obi.menhera.org/</code>.</p>
 <p>The tarball list below is the prebuilt artifact set. Some Unix-like platforms,
@@ -210,6 +212,9 @@ such as OpenBSD, are intentionally supported through a locally installed
 <code>ssh-obi-server</code> rather than a prebuilt tarball. Install with Cargo or a distro
 package, then connect normally; the bootstrap will use a compatible server from
 <code>~/.cargo/bin/ssh-obi-server</code> or from <code>PATH</code>.</p>
+<p>OpenBSD has no prebuilt binaries. On OpenBSD, install a Rust toolchain and run:</p>
+<pre><code class="language-sh">cargo install --features server-bin ssh-obi
+</code></pre>
 <p>Server-capable tarballs:</p>
 <ul>
 <li><code>release-x86_64-unknown-linux-musl.tar.gz</code></li>
