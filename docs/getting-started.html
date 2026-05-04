@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c7b4dc8e.js";
+            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-6266f562.js"></script>
+        <script src="toc-08fdb426.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,9 +184,11 @@
 <p>The client starts the system <code>ssh</code> binary and prepares the remote side over the
 same SSH connection. If a compatible server component is already installed, the
 session starts immediately.</p>
-<p>If the server component is missing or incompatible, <code>ssh-obi</code> asks before
-installing it into <code>~/.ssh-obi/bin</code> on the remote account. No root access is
-needed.</p>
+<p>If a compatible server is already installed at <code>~/.ssh-obi/bin</code>, at
+<code>~/.cargo/bin</code>, or on the remote <code>PATH</code>, <code>ssh-obi</code> uses it. If the server
+component is missing or incompatible and a prebuilt tarball exists for the
+remote platform, <code>ssh-obi</code> asks before installing it into <code>~/.ssh-obi/bin</code> on
+the remote account. No root access is needed for the built-in install path.</p>
 <p>After installation, <code>ssh-obi</code> attaches to a new or existing session.</p>
 <h2 id="session-selection"><a class="header" href="#session-selection">Session Selection</a></h2>
 <p>When you connect, <code>ssh-obi</code> looks for sessions owned by the same remote user.</p>

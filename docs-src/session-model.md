@@ -20,6 +20,10 @@ New sessions also start in the remote user's home directory. `TERM` is
 forwarded from the local client when it is useful; if it is missing or `dumb`,
 `ssh-obi` uses `xterm-256color`.
 
+When both sides support `initial-window-size.v1`, the client sends the current
+terminal size before creating or attaching to a session. New remote PTYs start
+with that size, and reattaches apply the size before replaying buffered output.
+
 ## Busy Sessions
 
 A session can have only one attached client. If another client is already

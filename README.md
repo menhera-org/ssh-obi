@@ -4,7 +4,7 @@
 
 The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
 
-**Status:** `v0.1.0` is published on crates.io and tagged on GitHub. The user-facing CLI and `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1` protocol capabilities are the first released baseline; breaking protocol changes should use new capability names.
+**Status:** `v0.1.1` is the current release. It is published on crates.io and tagged on GitHub. The user-facing CLI and `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1` protocol capabilities remain the first released baseline; `initial-window-size.v1` is the first additive capability. Breaking protocol changes should use new capability names.
 
 ## What it is
 
@@ -29,6 +29,7 @@ These clarify implementation choices that are easy to get subtly wrong:
 - **No systemd assumption.** systemd-based systems are supported, but the daemon design is not systemd-based and does not assume `user@UID.service`, `systemd-run`, or linger setup. The server daemonizes itself and should be treated as a plain per-user daemon.
 - **Daemon socket requests are role-specific.** A session may have at most one attached broker, but the daemon must still accept non-broker control requests while busy. Listing/info probes and detach requests are valid even when a broker is attached.
 - **Replay may duplicate recent bytes.** Reattach replays the daemon's current bounded ring buffer, and duplicates are acceptable. The implementation does not track a per-client replay cursor.
+- **Initial window size is sent before attach.** When both sides support `initial-window-size.v1`, the client sends local terminal dimensions before `AttachSession` or `NewSession`. New sessions create the PTY with that size, and reattaches apply it before replay.
 - **Ambiguous disconnects reconnect first.** If the client loses the SSH/broker connection without a graceful `ClientShouldExit` or shell-exit report, it reconnects. If the session is then gone or cannot provide an exit status, the client fails rather than guessing success.
 - **Foreground command detection is best-effort only.** The daemon must not interfere with the spawned shell to improve the `WHAT` column. POSIX-ish process-group/proc-table guessing is acceptable, and failure falls back to `(unknown)`.
 - **Windows is client-only.** The Windows build can run the local `ssh-obi` client and use the system `ssh` binary, but Windows is not a supported remote server platform. Windows Terminal or another console with Windows virtual terminal input support is recommended so arrows and other line-editing keys reach the remote shell correctly.
@@ -96,6 +97,7 @@ Reconnect is **byte-stream-based**, not screen-state-based. After the first atta
 ```
 ssh-obi/
 ├── Cargo.toml
+├── CHANGELOG.md
 ├── LICENSE-APACHE
 ├── LICENSE-MPL
 ├── README.md
@@ -126,7 +128,7 @@ Stable across all major versions. Forward-compatible by design:
 
 - **Fixed framing.** `msg_type: u8`, `flags: u8`, `length: u32 (BE)`, then `length` bytes of CBOR-encoded payload. Receivers must skip unknown `msg_type` silently.
 - **Conservative frame limits.** Maximum payload length is 1 MiB. Oversized lengths, malformed CBOR, invalid required fields, or other protocol violations close the connection with an error. Unknown message types at or below the size limit are skipped silently.
-- **Capability handshake, not version negotiation.** Each side sends a list of capability strings (`pty.v1`, `replay.v1`, `detach.v1`, `session-list.v1`, `exit-code.v1`). The intersection is the working set. New features ship as new capabilities; existing capabilities are frozen on first release. There is no "v2 of `pty.v1`" — that would be `pty.v2`, a separate capability.
+- **Capability handshake, not version negotiation.** Each side sends a list of capability strings (`pty.v1`, `replay.v1`, `detach.v1`, `session-list.v1`, `exit-code.v1`, `initial-window-size.v1`). The intersection is the working set. New features ship as new capabilities; existing capabilities are frozen on first release. There is no "v2 of `pty.v1`" — that would be `pty.v2`, a separate capability.
 - **Message bodies are CBOR** with stable field tags. Adding a field requires a new capability, never an in-place edit to an existing one.
 - **`ssh-obi-server --protocol-check <baseline>`** is the binary-compatibility probe used by the bootstrap. Returns 0 if the server can speak the framing/handshake of any protocol the given baseline supports. This is the only place a version *number* appears on the wire — and it's about binary compatibility, not feature compatibility.
 
@@ -140,7 +142,7 @@ ssh -T host 'sh -c <embedded-bootstrap> sh <args>'
 
 Bootstrap behavior on the remote:
 
-1. If `~/.ssh-obi/bin/ssh-obi-server --protocol-check $WANT` succeeds, write `OBI-SERVER-READY` to stdout and `exec` it.
+1. If `~/.ssh-obi/bin/ssh-obi-server --protocol-check $WANT`, `~/.cargo/bin/ssh-obi-server --protocol-check $WANT`, or a `ssh-obi-server` found on `PATH` succeeds, write `OBI-SERVER-READY` to stdout and `exec` the matching server.
 2. Otherwise write `OBI-INSTALL-REQUIRED` to stdout and read a line from stdin.
 3. The client prompts the user locally: `installing ssh-obi on host, continue? [Y/n]`. It writes `OBI-INSTALL-OK` or aborts.
 4. The bootstrap downloads the release archive (`curl -fsSL` || `wget -qO-` || `fetch -qo -` || `ftp -o - -M`), trusting HTTPS for the MVP, installs to `~/.ssh-obi/bin/`, updates shell rc files (`~/.bashrc`, `~/.zshenv`, `~/.config/fish/conf.d/ssh-obi.fish` — *not* `~/.bash_profile`, because non-interactive SSH execution is the target), writes `OBI-SERVER-READY`, and `exec`s the server.
@@ -207,10 +209,15 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 
 Cargo binary auto-discovery is disabled. `ssh-obi` is always declared, while `ssh-obi-server` requires the explicit `server-bin` feature so Windows `--bins` builds only the client. Unix release/dev commands that need the server binary must pass `--features server-bin`.
 
+For remote platforms without a published tarball, install the server in the
+remote account with `cargo install ssh-obi --features server-bin` or a distro
+package. The bootstrap checks both `~/.cargo/bin/ssh-obi-server` and
+`ssh-obi-server` on `PATH` before trying the built-in tarball install.
+
 ## Platform support
 
 - **Linux:** primary target. systemd-based and non-systemd distributions are supported, but systemd is not part of the required design. The daemon uses ordinary daemonization and should not require a system-wide service, setuid helper, or user service manager.
-- **macOS, FreeBSD, OpenBSD, NetBSD, illumos:** supported. Plain double-fork suffices.
+- **macOS, FreeBSD, OpenBSD, NetBSD, illumos:** supported. Plain double-fork suffices. Some platforms, including OpenBSD, are supported through Cargo or distro-packaged server installs rather than prebuilt tarballs.
 - **Windows:** client-only. Running the server on Windows is out of scope.
 - **Android:** out of scope.
 
@@ -245,6 +252,13 @@ These are settled — please don't relitigate without discussion:
 - **Socket location: `/tmp/ssh-obi-<uid>/<session-id>.sock`.** Per-user subdir created with mode 0700, ownership-checked on reuse. Stale sockets handled via `connect()`-then-`unlink()`-on-`ECONNREFUSED`. Refuses to start on NFS/CIFS/SMB. Validates path length under 100 bytes (macOS/BSD `sun_path` cap is 104).
 - **Wire protocol is forward-compatible by capability negotiation,** not version bumping. Once a capability ships, its message format is frozen forever. The only on-wire version number is `--protocol-check`, which gates binary compatibility of the framing/handshake layer.
 - **Auto-install over a single SSH invocation** via embedded `bootstrap.sh` passed as the remote command body. One auth round-trip total, even on first-ever connect to a remote. SSH stdin stays available for install confirmation and then the broker protocol. The client waits for the bootstrap marker before sending protocol bytes. Bootstrap writes shell rc files reachable from non-interactive SSH (`~/.bashrc`, `~/.zshenv`, fish `conf.d`), not login-only files.
+
+## Changelog
+
+See [`CHANGELOG.md`](./CHANGELOG.md). In short, `v0.1.1` adds initial window
+size negotiation for attach/new-session startup and remote server discovery via
+`~/.cargo/bin/ssh-obi-server` or `PATH` for Cargo-installed and distro-packaged
+servers.
 
 ## mdBook-based obi.menhera.org site
 

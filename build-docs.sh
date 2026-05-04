@@ -2,7 +2,9 @@
 
 set -eu
 
-cargo install -q mdbook
+if ! command -v mdbook >/dev/null 2>&1; then
+    cargo install -q mdbook
+fi
 mdbook build
 
 # mdBook overwrites docs/, so every file GitHub Pages needs but mdBook does

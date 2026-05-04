@@ -55,6 +55,115 @@ mod tests {
     }
 
     #[test]
+    fn embedded_script_checks_fixed_cargo_server_path() {
+        assert!(SCRIPT.contains("${HOME}/.cargo/bin/ssh-obi-server"));
+    }
+
+    #[test]
+    fn embedded_script_checks_path_server() {
+        assert!(SCRIPT.contains("command -v ssh-obi-server"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_script_execs_cargo_server_without_path_lookup() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!(
+            "ssh-obi-bootstrap-cargo-test-{}-{unique}",
+            std::process::id()
+        ));
+        let cargo_bin = home.join(".cargo").join("bin");
+        fs::create_dir_all(&cargo_bin).unwrap();
+        let server = cargo_bin.join("ssh-obi-server");
+        fs::write(
+            &server,
+            "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nprintf 'FAKE-SERVER %s\\n' \"$*\"\n",
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&server).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&server, perms).unwrap();
+
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg("sh")
+            .arg("0.1")
+            .arg("--term")
+            .arg("vt100")
+            .arg("--probe")
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+
+        let _ = fs::remove_dir_all(&home);
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OBI-SERVER-READY\n"));
+        assert!(stdout.contains("FAKE-SERVER --probe\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_script_execs_server_found_on_path() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ssh-obi-bootstrap-path-test-{}-{unique}",
+            std::process::id()
+        ));
+        let home = root.join("home");
+        let bin = root.join("bin");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        let server = bin.join("ssh-obi-server");
+        fs::write(
+            &server,
+            "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nprintf 'PATH-SERVER %s\\n' \"$*\"\n",
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&server).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&server, perms).unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg("sh")
+            .arg("0.1")
+            .arg("--term")
+            .arg("vt100")
+            .arg("--probe")
+            .env("HOME", &home)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+
+        let _ = fs::remove_dir_all(&root);
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OBI-SERVER-READY\n"));
+        assert!(stdout.contains("PATH-SERVER --probe\n"));
+    }
+
+    #[test]
     fn remote_command_runs_stdin_script_with_baseline() {
         let command = remote_shell_command(&[], "xterm-256color");
         assert!(command.starts_with("sh -c '"));

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c7b4dc8e.js";
+            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-6266f562.js"></script>
+        <script src="toc-08fdb426.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -194,14 +194,22 @@ sequences.</p>
 <li>Linux</li>
 <li>macOS</li>
 <li>FreeBSD</li>
+<li>OpenBSD when installed from Cargo or a distro package</li>
 <li>NetBSD</li>
 <li>illumos</li>
+<li>Other Unix-like systems where <code>ssh-obi-server</code> can be built from source and
+installed with Cargo or a distro package.</li>
 </ul>
 <p>The server component is not supported on Windows.</p>
 <p>systemd-based Linux distributions are supported, but systemd is not required.
 No system-wide service install is required.</p>
 <h2 id="downloads"><a class="header" href="#downloads">Downloads</a></h2>
 <p>Release files are served from <code>https://obi.menhera.org/</code>.</p>
+<p>The tarball list below is the prebuilt artifact set. Some Unix-like platforms,
+such as OpenBSD, are intentionally supported through a locally installed
+<code>ssh-obi-server</code> rather than a prebuilt tarball. Install with Cargo or a distro
+package, then connect normally; the bootstrap will use a compatible server from
+<code>~/.cargo/bin/ssh-obi-server</code> or from <code>PATH</code>.</p>
 <p>Server-capable tarballs:</p>
 <ul>
 <li><code>release-x86_64-unknown-linux-musl.tar.gz</code></li>

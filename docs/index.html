@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c7b4dc8e.js";
+            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-6266f562.js"></script>
+        <script src="toc-08fdb426.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,6 +175,8 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="ssh-obi"><a class="header" href="#ssh-obi">ssh-obi</a></h1>
+<p>Developed by <a href="https://www.menhera.org/">Human-life Information Platforms Institute
+(Menhera.org)</a>.</p>
 <p><code>ssh-obi</code> keeps SSH shells alive when the connection drops, when a laptop
 sleeps, or when the client moves between networks.</p>
 <p>It is designed to feel like plain SSH:</p>
@@ -190,9 +192,13 @@ use.</li>
 panes, tabs, or in-band escape commands. If you want window management, run
 <code>tmux</code> or another multiplexer inside the remote shell.</p>
 <h2 id="status"><a class="header" href="#status">Status</a></h2>
-<p><code>ssh-obi</code> <code>v0.1.0</code> is the first published release. It is available on
-crates.io, tagged as <code>v0.1.0</code> on GitHub, and distributed as release tarballs
-from <code>https://obi.menhera.org/</code>.</p>
+<p><code>ssh-obi</code> <code>v0.1.1</code> is the current release. It is available on crates.io,
+tagged as <code>v0.1.1</code> on GitHub, and distributed as release tarballs from
+<code>https://obi.menhera.org/</code>.</p>
+<p>The <code>v0.1.1</code> release improves attach startup by sending the local terminal
+window size before the remote PTY is attached or created. It also recognizes
+remote server binaries installed by a distro package on <code>PATH</code> or by Cargo at
+<code>~/.cargo/bin/ssh-obi-server</code>.</p>
 <p>The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
 <h2 id="quick-examples"><a class="header" href="#quick-examples">Quick Examples</a></h2>
@@ -229,6 +235,7 @@ machine:</p>
 behavior.</li>
 <li><a href="./platform-support.html">Platforms and Downloads</a> for supported systems and
 published tarball names.</li>
+<li><a href="./changelog.html">Changelog</a> for release notes.</li>
 </ul>
 
                     </main>

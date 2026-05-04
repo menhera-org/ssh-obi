@@ -11,9 +11,9 @@ use crate::bootstrap::{
 };
 use crate::cli::{ClientAction, ClientArgs};
 use crate::protocol::{
-    AttachSessionRequest, AttachedSession, Capabilities, DetachSessionRequest, ErrorMessage,
-    ExitStatus, Frame, MessageType, NewSessionRequest, ProtocolError, PtyData, SessionBusy,
-    SessionList, SessionListRequest, WindowSize,
+    AttachSessionRequest, AttachedSession, CAP_INITIAL_WINDOW_SIZE_V1, Capabilities,
+    DetachSessionRequest, ErrorMessage, ExitStatus, Frame, MessageType, NewSessionRequest,
+    ProtocolError, PtyData, SessionBusy, SessionList, SessionListRequest, WindowSize,
 };
 use crate::session::{
     AutoSelection, SessionIdError, SessionInfo, auto_select, render_session_table,
@@ -115,12 +115,29 @@ fn run_client_attempt(
         let _ = child.wait();
         return Err(err);
     }
-    if let Err(err) = exchange_capabilities(&mut child_stdout, &mut child_stdin) {
-        let _ = child.wait();
-        return Err(err);
-    }
+    let capabilities = match exchange_capabilities(&mut child_stdout, &mut child_stdin) {
+        Ok(capabilities) => capabilities,
+        Err(err) => {
+            let _ = child.wait();
+            return Err(err);
+        }
+    };
+    let initial_window_size = if matches!(args.action, ClientAction::Attach | ClientAction::New)
+        && capabilities
+            .iter()
+            .any(|capability| capability == CAP_INITIAL_WINDOW_SIZE_V1)
+    {
+        current_window_size().map_err(ClientRunError::WindowSize)?
+    } else {
+        None
+    };
 
-    let initial_action = match handle_initial_action(args, &mut child_stdout, &mut child_stdin) {
+    let initial_action = match handle_initial_action(
+        args,
+        &mut child_stdout,
+        &mut child_stdin,
+        initial_window_size.as_ref(),
+    ) {
         Ok(action) => action,
         Err(err) => {
             let _ = child.wait();
@@ -197,6 +214,7 @@ fn handle_initial_action<R, W>(
     args: &ClientArgs,
     reader: &mut R,
     writer: &mut W,
+    initial_window_size: Option<&WindowSize>,
 ) -> Result<InitialActionResult, ClientRunError>
 where
     R: Read,
@@ -244,13 +262,14 @@ where
             let selection = if let Some(session_id) = &args.session {
                 InitialClientSelection::Attach(session_id.clone())
             } else {
-                select_session(reader, writer)?
+                select_session(reader, writer, initial_window_size)?
             };
 
             let InitialClientSelection::Attach(session_id) = selection else {
                 return Ok(InitialActionResult::Attached { session_id: None });
             };
             let mut framed_writer = FramedWriter::new(writer);
+            write_initial_window_size(&mut framed_writer, initial_window_size)?;
             framed_writer.write_body(
                 MessageType::ATTACH_SESSION,
                 0,
@@ -265,6 +284,7 @@ where
         }
         ClientAction::New => {
             let mut framed_writer = FramedWriter::new(writer);
+            write_initial_window_size(&mut framed_writer, initial_window_size)?;
             framed_writer.write_body(MessageType::NEW_SESSION, 0, &NewSessionRequest)?;
             framed_writer.flush()?;
             Ok(InitialActionResult::Attached { session_id: None })
@@ -281,6 +301,7 @@ enum InitialClientSelection {
 fn select_session<R, W>(
     reader: &mut R,
     writer: &mut W,
+    initial_window_size: Option<&WindowSize>,
 ) -> Result<InitialClientSelection, ClientRunError>
 where
     R: Read,
@@ -311,6 +332,7 @@ where
     match auto_select(&sessions) {
         AutoSelection::NewSession => {
             let mut framed_writer = FramedWriter::new(writer);
+            write_initial_window_size(&mut framed_writer, initial_window_size)?;
             framed_writer.write_body(MessageType::NEW_SESSION, 0, &NewSessionRequest)?;
             framed_writer.flush()?;
             Ok(InitialClientSelection::NewAlreadySent)
@@ -318,13 +340,14 @@ where
         AutoSelection::Attach(session_id) => {
             Ok(InitialClientSelection::Attach(session_id.to_string()))
         }
-        AutoSelection::Prompt => prompt_session_selection(&sessions, writer),
+        AutoSelection::Prompt => prompt_session_selection(&sessions, writer, initial_window_size),
     }
 }
 
 fn prompt_session_selection<W>(
     sessions: &[SessionInfo],
     writer: &mut W,
+    initial_window_size: Option<&WindowSize>,
 ) -> Result<InitialClientSelection, ClientRunError>
 where
     W: Write,
@@ -342,6 +365,7 @@ where
 
     if answer == "n" {
         let mut framed_writer = FramedWriter::new(writer);
+        write_initial_window_size(&mut framed_writer, initial_window_size)?;
         framed_writer.write_body(MessageType::NEW_SESSION, 0, &NewSessionRequest)?;
         framed_writer.flush()?;
         return Ok(InitialClientSelection::NewAlreadySent);
@@ -363,6 +387,19 @@ where
     };
 
     Ok(InitialClientSelection::Attach(session.id.to_string()))
+}
+
+fn write_initial_window_size<W>(
+    writer: &mut FramedWriter<W>,
+    initial_window_size: Option<&WindowSize>,
+) -> Result<(), ClientRunError>
+where
+    W: Write,
+{
+    if let Some(window_size) = initial_window_size {
+        writer.write_body(MessageType::INITIAL_WINDOW_SIZE, 0, window_size)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -718,7 +755,10 @@ where
     }
 }
 
-fn exchange_capabilities<R, W>(reader: &mut R, writer: &mut W) -> Result<(), ClientRunError>
+fn exchange_capabilities<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<Vec<String>, ClientRunError>
 where
     R: Read,
     W: Write,
@@ -741,7 +781,7 @@ where
         return Err(ClientRunError::NoSharedCapabilities);
     }
 
-    Ok(())
+    Ok(intersection)
 }
 
 #[cfg(unix)]
@@ -1148,6 +1188,15 @@ mod tests {
         }
     }
 
+    fn test_window_size() -> WindowSize {
+        WindowSize {
+            rows: 33,
+            cols: 101,
+            pixel_width: 1001,
+            pixel_height: 501,
+        }
+    }
+
     #[test]
     fn detach_action_uses_broker_default() {
         assert!(server_args_for_action(&args(ClientAction::Detach)).is_empty());
@@ -1179,6 +1228,7 @@ mod tests {
             &args(ClientAction::Attach),
             &mut input.as_slice(),
             &mut output,
+            None,
         )
         .unwrap();
         assert!(matches!(
@@ -1204,7 +1254,8 @@ mod tests {
         let input = Vec::new();
         let mut output = Vec::new();
 
-        let action = handle_initial_action(&args, &mut input.as_slice(), &mut output).unwrap();
+        let action =
+            handle_initial_action(&args, &mut input.as_slice(), &mut output, None).unwrap();
         assert!(matches!(
             action,
             InitialActionResult::Attached {
@@ -1220,19 +1271,70 @@ mod tests {
     }
 
     #[test]
+    fn attach_action_writes_initial_window_size_before_attach_request() {
+        let size = test_window_size();
+        let mut args = args(ClientAction::Attach);
+        args.session = Some("aaaaaaaa".to_string());
+        let input = Vec::new();
+        let mut output = Vec::new();
+
+        handle_initial_action(&args, &mut input.as_slice(), &mut output, Some(&size)).unwrap();
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::INITIAL_WINDOW_SIZE);
+        let request_size: WindowSize = frame.decode_body().unwrap();
+        assert_eq!(request_size, size);
+
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::ATTACH_SESSION);
+        let request: AttachSessionRequest = frame.decode_body().unwrap();
+        assert_eq!(request.session_id, "aaaaaaaa");
+    }
+
+    #[test]
     fn new_action_writes_new_session_request() {
         let input = Vec::new();
         let mut output = Vec::new();
 
-        let action =
-            handle_initial_action(&args(ClientAction::New), &mut input.as_slice(), &mut output)
-                .unwrap();
+        let action = handle_initial_action(
+            &args(ClientAction::New),
+            &mut input.as_slice(),
+            &mut output,
+            None,
+        )
+        .unwrap();
         assert!(matches!(
             action,
             InitialActionResult::Attached { session_id: None }
         ));
 
         let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::NEW_SESSION);
+        let _: NewSessionRequest = frame.decode_body().unwrap();
+    }
+
+    #[test]
+    fn new_action_writes_initial_window_size_before_new_session_request() {
+        let size = test_window_size();
+        let input = Vec::new();
+        let mut output = Vec::new();
+
+        handle_initial_action(
+            &args(ClientAction::New),
+            &mut input.as_slice(),
+            &mut output,
+            Some(&size),
+        )
+        .unwrap();
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::INITIAL_WINDOW_SIZE);
+        let request_size: WindowSize = frame.decode_body().unwrap();
+        assert_eq!(request_size, size);
+
         let frame = reader.read_frame().unwrap().unwrap();
         assert_eq!(frame.msg_type(), MessageType::NEW_SESSION);
         let _: NewSessionRequest = frame.decode_body().unwrap();
@@ -1266,6 +1368,7 @@ mod tests {
             &args(ClientAction::List),
             &mut input.as_slice(),
             &mut output,
+            None,
         )
         .unwrap();
         assert!(matches!(
@@ -1304,6 +1407,7 @@ mod tests {
             &args(ClientAction::List),
             &mut input.as_slice(),
             &mut output,
+            None,
         )
         .unwrap();
         assert!(matches!(

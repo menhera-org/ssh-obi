@@ -1,0 +1,39 @@
+# Changelog
+
+## v0.1.1
+
+Released for the `0.1.x` protocol line.
+
+### Added
+
+- The client sends an initial terminal window size before attach and new-session
+  requests when the remote server supports `initial-window-size.v1`.
+- New sessions create the remote PTY with the local terminal size when that size
+  is available.
+- Reattaches apply the local terminal size before replaying buffered output.
+- The Unix bootstrap detects compatible `ssh-obi-server` binaries in three
+  places before trying a tarball install:
+  `~/.ssh-obi/bin/ssh-obi-server`, `~/.cargo/bin/ssh-obi-server`, and
+  `ssh-obi-server` found on `PATH`.
+
+### Notes
+
+- The protocol baseline remains `0.1`; `initial-window-size.v1` is negotiated as
+  a capability.
+- Platforms without a published release tarball can still be used as remote
+  servers when a compatible `ssh-obi-server` is installed by Cargo or a distro
+  package.
+
+## v0.1.0
+
+Initial public release.
+
+### Added
+
+- Local `ssh-obi` client and Unix remote `ssh-obi-server`.
+- Per-user long-lived remote sessions.
+- Attach, new-session, list, and detach commands.
+- Reconnect to a known session after ambiguous disconnects.
+- Bounded replay of recent output on reattach.
+- Shell exit status forwarding.
+- Unix bootstrap install flow and Windows client-only bootstrap flow.

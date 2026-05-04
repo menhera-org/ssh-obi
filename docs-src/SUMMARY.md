@@ -8,5 +8,6 @@
 - [Sessions](./session-model.md)
 - [Platforms and Downloads](./platform-support.md)
 - [Troubleshooting](./troubleshooting.md)
+- [Changelog](./changelog.md)
 
 - [Developer Docs](./developer-docs.md)

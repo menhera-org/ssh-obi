@@ -37,10 +37,23 @@ export TERM
 
 install_root="${HOME}/.ssh-obi"
 bin_dir="${install_root}/bin"
-server="${bin_dir}/ssh-obi-server"
+managed_server="${bin_dir}/ssh-obi-server"
+cargo_server="${HOME}/.cargo/bin/ssh-obi-server"
 base_url="https://obi.menhera.org"
 
-if [ -x "$server" ] && "$server" --protocol-check "$want" >/dev/null 2>&1; then
+find_usable_server() {
+    path_server="$(command -v ssh-obi-server 2>/dev/null || true)"
+    for candidate in "$managed_server" "$cargo_server" "$path_server"; do
+        if [ "$candidate" != "" ] && [ -x "$candidate" ] && "$candidate" --protocol-check "$want" >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+server="$(find_usable_server || true)"
+if [ "$server" != "" ]; then
     if [ "$install_only" -eq 0 ]; then
         printf '%s\n' 'OBI-SERVER-READY'
         exec "$server" "$@"
@@ -162,6 +175,7 @@ if ! grep -F "$fish_line" "$fish_file" >/dev/null 2>&1; then
     printf '%s\n' "$fish_line" >>"$fish_file"
 fi
 
+server="$managed_server"
 if "$server" --protocol-check "$want" >/dev/null 2>&1; then
     if [ "$install_only" -eq 1 ]; then
         printf '%s\n' 'OBI-INSTALL-COMPLETE'

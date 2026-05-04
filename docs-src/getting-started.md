@@ -15,9 +15,11 @@ The client starts the system `ssh` binary and prepares the remote side over the
 same SSH connection. If a compatible server component is already installed, the
 session starts immediately.
 
-If the server component is missing or incompatible, `ssh-obi` asks before
-installing it into `~/.ssh-obi/bin` on the remote account. No root access is
-needed.
+If a compatible server is already installed at `~/.ssh-obi/bin`, at
+`~/.cargo/bin`, or on the remote `PATH`, `ssh-obi` uses it. If the server
+component is missing or incompatible and a prebuilt tarball exists for the
+remote platform, `ssh-obi` asks before installing it into `~/.ssh-obi/bin` on
+the remote account. No root access is needed for the built-in install path.
 
 After installation, `ssh-obi` attaches to a new or existing session.
 

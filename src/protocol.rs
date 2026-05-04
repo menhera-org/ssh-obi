@@ -14,6 +14,7 @@ pub const CAP_REPLAY_V1: &str = "replay.v1";
 pub const CAP_DETACH_V1: &str = "detach.v1";
 pub const CAP_SESSION_LIST_V1: &str = "session-list.v1";
 pub const CAP_EXIT_CODE_V1: &str = "exit-code.v1";
+pub const CAP_INITIAL_WINDOW_SIZE_V1: &str = "initial-window-size.v1";
 
 pub const DEFAULT_CAPABILITIES: &[&str] = &[
     CAP_PTY_V1,
@@ -21,6 +22,7 @@ pub const DEFAULT_CAPABILITIES: &[&str] = &[
     CAP_DETACH_V1,
     CAP_SESSION_LIST_V1,
     CAP_EXIT_CODE_V1,
+    CAP_INITIAL_WINDOW_SIZE_V1,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,6 +45,7 @@ impl MessageType {
     pub const EXIT_STATUS: Self = Self(14);
     pub const ERROR: Self = Self(15);
     pub const ATTACHED_SESSION: Self = Self(16);
+    pub const INITIAL_WINDOW_SIZE: Self = Self(17);
 
     pub const fn new(value: u8) -> Self {
         Self(value)
@@ -70,6 +73,7 @@ impl MessageType {
             Self::EXIT_STATUS => "ExitStatus",
             Self::ERROR => "Error",
             Self::ATTACHED_SESSION => "AttachedSession",
+            Self::INITIAL_WINDOW_SIZE => "InitialWindowSize",
             _ => return None,
         })
     }
@@ -193,7 +197,7 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<Option<Frame>, ProtocolErro
 }
 
 pub fn supports_protocol_baseline(baseline: &str) -> bool {
-    matches!(baseline, "0.1" | "0.1.0")
+    matches!(baseline, "0.1" | "0.1.0" | "0.1.1")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

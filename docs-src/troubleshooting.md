@@ -14,6 +14,17 @@ for that OS/CPU pair.
 Use [Platform Support](./platform-support.md) to check the published target
 list.
 
+If the platform can build Rust code, install the server on the remote account
+instead:
+
+```sh
+cargo install ssh-obi --features server-bin
+```
+
+The bootstrap probes `~/.cargo/bin/ssh-obi-server` directly and also accepts a
+compatible `ssh-obi-server` on `PATH`, so Cargo-installed and distro-packaged
+servers can be used without a prebuilt tarball.
+
 ## Windows install succeeds but `ssh-obi.exe` is not found
 
 The Windows bootstrap updates the user's PATH. Existing terminals may not see

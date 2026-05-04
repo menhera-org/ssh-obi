@@ -22,6 +22,16 @@ This installs the client binary, `ssh-obi`. It does not install the remote
 server binary by default. For normal use, let the client bootstrap or update
 the remote server component when you connect.
 
+For remote platforms where no prebuilt server tarball is published, install a
+server-capable build in the remote account with:
+
+```sh
+cargo install ssh-obi --features server-bin
+```
+
+The attach bootstrap checks `~/.cargo/bin/ssh-obi-server` directly, so this
+works even when that directory is not on `PATH`.
+
 ## Unix Install
 
 To preinstall or update a Unix-like account without starting a session:
@@ -66,6 +76,17 @@ ssh-obi user@example.com
 
 If the remote server component is missing or incompatible, the local client asks
 for confirmation and installs it into that remote account.
+
+During normal attach, the bootstrap probes for an existing compatible server in
+this order:
+
+1. `~/.ssh-obi/bin/ssh-obi-server`
+2. `~/.cargo/bin/ssh-obi-server`
+3. `ssh-obi-server` found on `PATH`
+
+The `PATH` probe supports distro-packaged installs. The direct Cargo path
+supports remote platforms where `cargo install ssh-obi --features server-bin`
+is the practical server install path.
 
 ## Windows Client Install
 

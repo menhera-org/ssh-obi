@@ -11,12 +11,12 @@ use std::time::Instant;
 
 #[cfg(unix)]
 use crate::protocol::{
-    AttachSessionRequest, AttachedSession, BrokerAttachRequest, DaemonInfoRequest, DetachRequest,
-    NewSessionRequest,
+    AttachSessionRequest, AttachedSession, BrokerAttachRequest, CAP_INITIAL_WINDOW_SIZE_V1,
+    DaemonInfoRequest, DetachRequest, NewSessionRequest,
 };
 use crate::protocol::{
     Capabilities, DaemonInfo, DetachSessionRequest, ErrorMessage, MessageType, ProtocolError,
-    SessionList, SessionListRequest,
+    SessionList, SessionListRequest, WindowSize,
 };
 use crate::session::{SessionIdError, SocketPathError, socket_dir_for_uid, socket_path_for_uid};
 #[cfg(unix)]
@@ -49,6 +49,8 @@ where
     let mut reader = FramedReader::new(reader);
     let mut writer = FramedWriter::new(writer);
     let mut saw_request = false;
+    #[cfg(unix)]
+    let mut pending_initial_window_size: Option<WindowSize> = None;
 
     loop {
         let Some(frame) = reader.read_frame()? else {
@@ -68,6 +70,18 @@ where
                 &Capabilities::default_supported(),
             )?;
             writer.flush()?;
+            continue;
+        }
+
+        if frame.msg_type() == MessageType::INITIAL_WINDOW_SIZE {
+            #[cfg(unix)]
+            {
+                pending_initial_window_size = Some(frame.decode_body()?);
+            }
+            #[cfg(not(unix))]
+            {
+                let _: WindowSize = frame.decode_body()?;
+            }
             continue;
         }
 
@@ -108,7 +122,7 @@ where
                 let session_id = request.session_id;
                 let path = socket_path_for_uid(uid, &session_id)?;
                 let daemon = connect_daemon(path)?;
-                attach_daemon(&daemon)?;
+                attach_daemon(&daemon, pending_initial_window_size)?;
                 writer.write_body(
                     MessageType::ATTACHED_SESSION,
                     0,
@@ -130,10 +144,10 @@ where
             #[cfg(unix)]
             {
                 let _: NewSessionRequest = frame.decode_body()?;
-                let session_id = launch_daemon(uid)?;
+                let session_id = launch_daemon(uid, pending_initial_window_size.clone())?;
                 let path = socket_path_for_uid(uid, session_id.as_str())?;
                 let daemon = connect_daemon(path)?;
-                attach_daemon(&daemon)?;
+                attach_daemon(&daemon, pending_initial_window_size)?;
                 writer.write_body(
                     MessageType::ATTACHED_SESSION,
                     0,
@@ -168,7 +182,10 @@ fn current_uid() -> u32 {
 }
 
 #[cfg(unix)]
-fn launch_daemon(uid: u32) -> Result<crate::session::SessionId, ServerError> {
+fn launch_daemon(
+    uid: u32,
+    initial_window_size: Option<WindowSize>,
+) -> Result<crate::session::SessionId, ServerError> {
     if uid != current_uid() {
         return Err(ServerError::UidMismatch {
             expected: current_uid(),
@@ -189,6 +206,17 @@ fn launch_daemon(uid: u32) -> Result<crate::session::SessionId, ServerError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(size) = initial_window_size {
+        command
+            .arg("--rows")
+            .arg(size.rows.to_string())
+            .arg("--cols")
+            .arg(size.cols.to_string())
+            .arg("--pixel-width")
+            .arg(size.pixel_width.to_string())
+            .arg("--pixel-height")
+            .arg(size.pixel_height.to_string());
+    }
 
     let mut child = command.spawn().map_err(ServerError::SpawnDaemon)?;
     let status = child.wait().map_err(ServerError::WaitDaemonStarter)?;
@@ -236,10 +264,20 @@ fn connect_daemon(
 }
 
 #[cfg(unix)]
-fn attach_daemon(daemon: &std::os::unix::net::UnixStream) -> Result<(), ServerError> {
-    exchange_daemon_capabilities(daemon)?;
+fn attach_daemon(
+    daemon: &std::os::unix::net::UnixStream,
+    initial_window_size: Option<WindowSize>,
+) -> Result<(), ServerError> {
+    let capabilities = exchange_daemon_capabilities(daemon)?;
 
     let mut daemon_writer = FramedWriter::new(daemon.try_clone().map_err(ServerError::Connect)?);
+    if let Some(size) = initial_window_size
+        && capabilities
+            .iter()
+            .any(|capability| capability == CAP_INITIAL_WINDOW_SIZE_V1)
+    {
+        daemon_writer.write_body(MessageType::INITIAL_WINDOW_SIZE, 0, &size)?;
+    }
     daemon_writer.write_body(MessageType::BROKER_ATTACH, 0, &BrokerAttachRequest)?;
     daemon_writer.flush()?;
     Ok(())
@@ -248,7 +286,7 @@ fn attach_daemon(daemon: &std::os::unix::net::UnixStream) -> Result<(), ServerEr
 #[cfg(unix)]
 fn exchange_daemon_capabilities(
     stream: &std::os::unix::net::UnixStream,
-) -> Result<(), ServerError> {
+) -> Result<Vec<String>, ServerError> {
     let reader_stream = stream.try_clone().map_err(ServerError::Connect)?;
     {
         let mut writer = FramedWriter::new(stream.try_clone().map_err(ServerError::Connect)?);
@@ -272,7 +310,7 @@ fn exchange_daemon_capabilities(
             if intersection.is_empty() {
                 return Err(ServerError::NoSharedCapabilities);
             }
-            return Ok(());
+            return Ok(intersection);
         }
 
         if frame.msg_type().name().is_none() {
@@ -830,6 +868,92 @@ mod tests {
         let status: ExitStatus = frame.decode_body().unwrap();
         assert_eq!(status.code, Some(0));
         assert_eq!(status.signal, None);
+
+        daemon.join().unwrap();
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn broker_forwards_initial_window_size_before_daemon_attach() {
+        let uid = current_uid();
+        let socket_dir = socket_dir_for_uid(uid);
+        prepare_socket_dir(&socket_dir, uid).unwrap();
+        let path = socket_path(&socket_dir, "cccccccc").unwrap();
+        let _ = fs::remove_file(&path);
+        let listener = match UnixListener::bind(&path) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping Unix socket test because bind is not permitted here");
+                return;
+            }
+            Err(err) => panic!("failed to bind test Unix socket: {err}"),
+        };
+        let size = WindowSize {
+            rows: 33,
+            cols: 101,
+            pixel_width: 1001,
+            pixel_height: 501,
+        };
+        let expected_size = size.clone();
+
+        let daemon = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let reader_stream = stream.try_clone().unwrap();
+            let mut reader = FramedReader::new(reader_stream);
+            answer_capability_exchange(&mut reader, stream.try_clone().unwrap());
+
+            let frame = reader.read_frame().unwrap().unwrap();
+            assert_eq!(frame.msg_type(), MessageType::INITIAL_WINDOW_SIZE);
+            let daemon_size: WindowSize = frame.decode_body().unwrap();
+            assert_eq!(daemon_size, expected_size);
+
+            let frame = reader.read_frame().unwrap().unwrap();
+            assert_eq!(frame.msg_type(), MessageType::BROKER_ATTACH);
+            let _: BrokerAttachRequest = frame.decode_body().unwrap();
+
+            let mut writer = FramedWriter::new(stream);
+            writer
+                .write_body(
+                    MessageType::EXIT_STATUS,
+                    0,
+                    &ExitStatus {
+                        code: Some(0),
+                        signal: None,
+                    },
+                )
+                .unwrap();
+            writer.flush().unwrap();
+        });
+
+        let mut request = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut request);
+            writer
+                .write_body(MessageType::INITIAL_WINDOW_SIZE, 0, &size)
+                .unwrap();
+            writer
+                .write_body(
+                    MessageType::ATTACH_SESSION,
+                    0,
+                    &AttachSessionRequest {
+                        session_id: "cccccccc".to_string(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let mut response = Vec::new();
+        handle_broker_request(Cursor::new(request), &mut response, uid).unwrap();
+
+        let mut reader = FramedReader::new(response.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::ATTACHED_SESSION);
+        let attached: AttachedSession = frame.decode_body().unwrap();
+        assert_eq!(attached.session_id, "cccccccc");
+
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::EXIT_STATUS);
+        let _: ExitStatus = frame.decode_body().unwrap();
 
         daemon.join().unwrap();
         let _ = fs::remove_file(&path);

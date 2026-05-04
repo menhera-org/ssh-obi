@@ -23,8 +23,11 @@ Supported remote server platforms:
 - Linux
 - macOS
 - FreeBSD
+- OpenBSD when installed from Cargo or a distro package
 - NetBSD
 - illumos
+- Other Unix-like systems where `ssh-obi-server` can be built from source and
+  installed with Cargo or a distro package.
 
 The server component is not supported on Windows.
 
@@ -34,6 +37,12 @@ No system-wide service install is required.
 ## Downloads
 
 Release files are served from `https://obi.menhera.org/`.
+
+The tarball list below is the prebuilt artifact set. Some Unix-like platforms,
+such as OpenBSD, are intentionally supported through a locally installed
+`ssh-obi-server` rather than a prebuilt tarball. Install with Cargo or a distro
+package, then connect normally; the bootstrap will use a compatible server from
+`~/.cargo/bin/ssh-obi-server` or from `PATH`.
 
 Server-capable tarballs:
 

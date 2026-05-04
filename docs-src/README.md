@@ -1,5 +1,8 @@
 # ssh-obi
 
+Developed by [Human-life Information Platforms Institute
+(Menhera.org)](https://www.menhera.org/).
+
 `ssh-obi` keeps SSH shells alive when the connection drops, when a laptop
 sleeps, or when the client moves between networks.
 
@@ -18,9 +21,14 @@ panes, tabs, or in-band escape commands. If you want window management, run
 
 ## Status
 
-`ssh-obi` `v0.1.0` is the first published release. It is available on
-crates.io, tagged as `v0.1.0` on GitHub, and distributed as release tarballs
-from `https://obi.menhera.org/`.
+`ssh-obi` `v0.1.1` is the current release. It is available on crates.io,
+tagged as `v0.1.1` on GitHub, and distributed as release tarballs from
+`https://obi.menhera.org/`.
+
+The `v0.1.1` release improves attach startup by sending the local terminal
+window size before the remote PTY is attached or created. It also recognizes
+remote server binaries installed by a distro package on `PATH` or by Cargo at
+`~/.cargo/bin/ssh-obi-server`.
 
 The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.
@@ -75,3 +83,4 @@ ssh-obi-server --detach
   behavior.
 - [Platforms and Downloads](./platform-support.md) for supported systems and
   published tarball names.
+- [Changelog](./changelog.md) for release notes.

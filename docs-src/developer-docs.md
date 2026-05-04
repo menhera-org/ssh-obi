@@ -57,9 +57,9 @@ Pages after each build:
 
 ## Release Builds
 
-The first published release is `v0.1.0`. It is published to crates.io and
-tagged on GitHub as `v0.1.0`. Release tarballs for the bootstrap installers are
-served from `https://obi.menhera.org/`.
+The current release is `v0.1.1`. It is published to crates.io and tagged on
+GitHub as `v0.1.1`. Release tarballs for the bootstrap installers are served
+from `https://obi.menhera.org/`.
 
 Use:
 
@@ -139,3 +139,9 @@ Current capability names include:
 - `detach.v1`
 - `session-list.v1`
 - `exit-code.v1`
+- `initial-window-size.v1`
+
+`initial-window-size.v1` lets the client send terminal dimensions before an
+attach or new-session request. The broker applies the size before replay on
+reattach, and new daemons create their PTY with that size when possible. The
+protocol baseline remains `0.1`.

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c7b4dc8e.js";
+            window.path_to_searchindex_js = "searchindex-d17d0aa6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-6266f562.js"></script>
+        <script src="toc-08fdb426.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -189,6 +189,12 @@ HTTPS.</p>
 <p>This installs the client binary, <code>ssh-obi</code>. It does not install the remote
 server binary by default. For normal use, let the client bootstrap or update
 the remote server component when you connect.</p>
+<p>For remote platforms where no prebuilt server tarball is published, install a
+server-capable build in the remote account with:</p>
+<pre><code class="language-sh">cargo install ssh-obi --features server-bin
+</code></pre>
+<p>The attach bootstrap checks <code>~/.cargo/bin/ssh-obi-server</code> directly, so this
+works even when that directory is not on <code>PATH</code>.</p>
 <h2 id="unix-install"><a class="header" href="#unix-install">Unix Install</a></h2>
 <p>To preinstall or update a Unix-like account without starting a session:</p>
 <pre><code class="language-sh">wget -O - https://obi.menhera.org/bootstrap.sh | sh -s -- --install
@@ -222,6 +228,16 @@ handles the remote check during normal connection:</p>
 </code></pre>
 <p>If the remote server component is missing or incompatible, the local client asks
 for confirmation and installs it into that remote account.</p>
+<p>During normal attach, the bootstrap probes for an existing compatible server in
+this order:</p>
+<ol>
+<li><code>~/.ssh-obi/bin/ssh-obi-server</code></li>
+<li><code>~/.cargo/bin/ssh-obi-server</code></li>
+<li><code>ssh-obi-server</code> found on <code>PATH</code></li>
+</ol>
+<p>The <code>PATH</code> probe supports distro-packaged installs. The direct Cargo path
+supports remote platforms where <code>cargo install ssh-obi --features server-bin</code>
+is the practical server install path.</p>
 <h2 id="windows-client-install"><a class="header" href="#windows-client-install">Windows Client Install</a></h2>
 <p>Windows can run the client only. It cannot run the remote server.</p>
 <p>PowerShell is preferred:</p>

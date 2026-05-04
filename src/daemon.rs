@@ -115,7 +115,10 @@ mod runtime {
 
     const ACCEPT_POLL: Duration = Duration::from_millis(50);
 
-    pub fn run_daemon(session_id: SessionId) -> Result<(), DaemonError> {
+    pub fn run_daemon(
+        session_id: SessionId,
+        initial_window_size: Option<WindowSize>,
+    ) -> Result<(), DaemonError> {
         let uid = nix::unistd::Uid::current().as_raw();
         let socket_dir = socket_dir_for_uid(uid);
         prepare_socket_dir(&socket_dir, uid)?;
@@ -148,7 +151,7 @@ mod runtime {
                 ("TERM", &term),
             ],
             Some(&home),
-            None,
+            initial_window_size,
         )?;
         let master_write = nix::unistd::dup(pty.master.as_fd()).map_err(DaemonError::DupPty)?;
         let master_write = Arc::new(Mutex::new(fs::File::from(master_write)));
@@ -291,6 +294,7 @@ mod runtime {
     ) -> Result<(), DaemonError> {
         let mut reader = FramedReader::new(stream.try_clone().map_err(DaemonError::StreamClone)?);
         let mut saw_frame = false;
+        let mut initial_window_size = None;
 
         loop {
             let Some(frame) = reader.read_frame()? else {
@@ -312,6 +316,11 @@ mod runtime {
                     &Capabilities::default_supported(),
                 )?;
                 writer.flush()?;
+                continue;
+            }
+
+            if frame.msg_type() == MessageType::INITIAL_WINDOW_SIZE {
+                initial_window_size = Some(frame.decode_body()?);
                 continue;
             }
 
@@ -352,7 +361,7 @@ mod runtime {
                     let _: BrokerAttachRequest = frame.decode_body()?;
                 }
 
-                return attach_broker(stream, reader, state, master_write);
+                return attach_broker(stream, reader, state, master_write, initial_window_size);
             }
 
             if frame.msg_type().name().is_none() {
@@ -368,6 +377,7 @@ mod runtime {
         mut reader: FramedReader<UnixStream>,
         state: Arc<Mutex<DaemonState>>,
         master_write: Arc<Mutex<fs::File>>,
+        initial_window_size: Option<WindowSize>,
     ) -> Result<(), DaemonError> {
         let writer = Arc::new(Mutex::new(
             stream.try_clone().map_err(DaemonError::StreamClone)?,
@@ -390,6 +400,23 @@ mod runtime {
             });
             (token, replay)
         };
+        if let Some(size) = initial_window_size {
+            let result = {
+                let master = master_write.lock().expect("pty writer poisoned");
+                set_window_size(master.as_fd(), size)
+            };
+            if let Err(err) = result {
+                let mut state = state.lock().expect("daemon state poisoned");
+                if state
+                    .broker
+                    .as_ref()
+                    .is_some_and(|broker| broker.token == token)
+                {
+                    state.detach_current(SystemTime::now());
+                }
+                return Err(DaemonError::PtyWindowSize(err));
+            }
+        }
 
         if !replay.is_empty() {
             write_broker_pty_data(writer.clone(), &replay)?;
@@ -742,7 +769,10 @@ impl fmt::Display for DaemonError {
 impl std::error::Error for DaemonError {}
 
 #[cfg(not(unix))]
-pub fn run_daemon(_session_id: crate::session::SessionId) -> Result<(), DaemonError> {
+pub fn run_daemon(
+    _session_id: crate::session::SessionId,
+    _initial_window_size: Option<crate::protocol::WindowSize>,
+) -> Result<(), DaemonError> {
     Err(DaemonError::UnsupportedPlatform(
         "ssh-obi-server daemon mode requires Unix",
     ))
