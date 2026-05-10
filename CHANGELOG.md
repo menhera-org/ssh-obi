@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.3
+
+Released for the `0.1.x` protocol line.
+
+### Added
+
+- New sessions print the remote host MOTD before the shell starts, using
+  `/run/motd.dynamic`, `/etc/motd`, and readable non-empty files under
+  `/etc/motd.d/`. A user `~/.hushlogin` suppresses this MOTD output.
+
+### Changed
+
+- Automatic reconnect retries now use a small capped exponential backoff:
+  125ms, 250ms, 500ms, 1s, then 2s, with a maximum of 10 attempts.
+
+### Notes
+
+- The wire protocol baseline remains `0.1`; `v0.1.3` remains compatible with
+  the `0.1.x` framing and capability model.
+
 ## v0.1.2
 
 Released for the `0.1.x` protocol line.
@@ -13,11 +33,6 @@ Released for the `0.1.x` protocol line.
 - During automatic reconnect, if the target session still reports
   `SessionBusy`, the client now asks that stale attached client to detach and
   then retries the reconnect.
-- Automatic reconnect retries use a small capped exponential backoff: 125ms,
-  250ms, 500ms, 1s, then 2s, with a maximum of 10 attempts.
-- New sessions print the remote host MOTD before the shell starts, using
-  `/run/motd.dynamic`, `/etc/motd`, and readable non-empty files under
-  `/etc/motd.d/`. A user `~/.hushlogin` suppresses this MOTD output.
 - The Unix bootstrap has explicit OpenBSD handling. OpenBSD has no prebuilt
   release tarballs; when no compatible server is already installed, the
   bootstrap tells the user to install a Rust toolchain and run

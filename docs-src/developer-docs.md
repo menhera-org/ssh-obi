@@ -57,8 +57,8 @@ Pages after each build:
 
 ## Release Builds
 
-The current release is `v0.1.2`. It is published to crates.io and tagged on
-GitHub as `v0.1.2`. Release tarballs for the bootstrap installers are served
+The current release is `v0.1.3`. It is published to crates.io and tagged on
+GitHub as `v0.1.3`. Release tarballs for the bootstrap installers are served
 from `https://obi.menhera.org/`.
 
 Use:

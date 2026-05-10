@@ -4,7 +4,7 @@
 
 The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
 
-**Status:** `v0.1.2` is the current release. It is published on crates.io and tagged on GitHub. The user-facing CLI and `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1` protocol capabilities remain the first released baseline; `initial-window-size.v1` is the first additive capability. Breaking protocol changes should use new capability names.
+**Status:** `v0.1.3` is the current release. It is published on crates.io and tagged on GitHub. The user-facing CLI and `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1` protocol capabilities remain the first released baseline; `initial-window-size.v1` is the first additive capability. Breaking protocol changes should use new capability names.
 
 ## What it is
 
@@ -267,10 +267,11 @@ These are settled — please don't relitigate without discussion:
 
 ## Changelog
 
-See [`CHANGELOG.md`](./CHANGELOG.md). In short, `v0.1.2` adds Linux
-systemd-scope placement for PTY children when available, reconnect cleanup and
-capped backoff for stale attached clients, MOTD printing before new session
-shells start, and explicit OpenBSD bootstrap guidance.
+See [`CHANGELOG.md`](./CHANGELOG.md). In short, `v0.1.3` adds MOTD printing
+before new session shells start and caps automatic reconnect retries with a
+small exponential backoff. Earlier `v0.1.2` work added Linux systemd-scope
+placement for PTY children when available, reconnect cleanup for stale attached
+clients, and explicit OpenBSD bootstrap guidance.
 
 ## mdBook-based obi.menhera.org site
 

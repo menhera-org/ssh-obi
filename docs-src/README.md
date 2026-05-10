@@ -21,14 +21,12 @@ panes, tabs, or in-band escape commands. If you want window management, run
 
 ## Status
 
-`ssh-obi` `v0.1.2` is the current release. It is available on crates.io,
-tagged as `v0.1.2` on GitHub, and distributed as release tarballs from
+`ssh-obi` `v0.1.3` is the current release. It is available on crates.io,
+tagged as `v0.1.3` on GitHub, and distributed as release tarballs from
 `https://obi.menhera.org/`.
 
-The `v0.1.2` release adds safer reconnect behavior for sessions whose previous
-client is still attached, capped reconnect backoff, MOTD printing before new
-session shells start, explicit OpenBSD install guidance, and best-effort
-systemd cgroup separation for newly spawned PTY children on Linux. The `0.1`
+The `v0.1.3` release adds MOTD printing before new session shells start and
+caps automatic reconnect retries with a small exponential backoff. The `0.1`
 wire protocol baseline remains unchanged.
 
 The documentation on this site is the user-facing source for the published

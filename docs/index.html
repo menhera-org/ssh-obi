@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d972282a.js";
+            window.path_to_searchindex_js = "searchindex-4264409a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -192,13 +192,11 @@ use.</li>
 panes, tabs, or in-band escape commands. If you want window management, run
 <code>tmux</code> or another multiplexer inside the remote shell.</p>
 <h2 id="status"><a class="header" href="#status">Status</a></h2>
-<p><code>ssh-obi</code> <code>v0.1.2</code> is the current release. It is available on crates.io,
-tagged as <code>v0.1.2</code> on GitHub, and distributed as release tarballs from
+<p><code>ssh-obi</code> <code>v0.1.3</code> is the current release. It is available on crates.io,
+tagged as <code>v0.1.3</code> on GitHub, and distributed as release tarballs from
 <code>https://obi.menhera.org/</code>.</p>
-<p>The <code>v0.1.2</code> release adds safer reconnect behavior for sessions whose previous
-client is still attached, capped reconnect backoff, MOTD printing before new
-session shells start, explicit OpenBSD install guidance, and best-effort
-systemd cgroup separation for newly spawned PTY children on Linux. The <code>0.1</code>
+<p>The <code>v0.1.3</code> release adds MOTD printing before new session shells start and
+caps automatic reconnect retries with a small exponential backoff. The <code>0.1</code>
 wire protocol baseline remains unchanged.</p>
 <p>The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
