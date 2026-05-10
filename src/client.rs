@@ -21,7 +21,9 @@ use crate::session::{
 use crate::terminal::{RawModeGuard, TerminalError};
 use crate::transport::{FramedReader, FramedWriter};
 
-const RECONNECT_DELAY: Duration = Duration::from_millis(250);
+const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(125);
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
 
 #[cfg(unix)]
 type ClientRawModeGuard = RawModeGuard<std::io::Stdin>;
@@ -40,7 +42,7 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
     let mut attached_io = None;
     let mut next_args = args.clone();
     let mut known_session_id = args.session.clone();
-    let mut reconnecting = false;
+    let mut reconnect_attempts = 0;
     let mut attempt_id = 0;
 
     loop {
@@ -56,15 +58,17 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
                 if reconnect_busy_session(
                     &failure.error,
                     known_session_id.as_deref(),
-                    reconnecting,
+                    reconnect_attempts > 0,
                 )
                 .is_some() =>
             {
                 let session_id =
                     reconnect_busy_session(&failure.error, known_session_id.as_deref(), true)
                         .expect("guard matched reconnect busy session");
+                let delay =
+                    next_reconnect_delay(&mut reconnect_attempts, &session_id, failure.error)?;
                 eprintln!(
-                    "ssh-obi: session {session_id} still has an attached client; requesting detach"
+                    "ssh-obi: session {session_id} still has an attached client; requesting detach before reconnect attempt {reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS}"
                 );
                 detach_stale_client_for_reconnect(args, &session_id).map_err(|source| {
                     ClientRunError::ReconnectFailed {
@@ -72,14 +76,13 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
                         source: Box::new(source),
                     }
                 })?;
-                thread::sleep(RECONNECT_DELAY);
+                thread::sleep(delay);
 
                 next_args = args.clone();
                 next_args.action = ClientAction::Attach;
                 next_args.session = Some(session_id);
             }
             Err(failure) if is_ambiguous_disconnect(&failure.error) => {
-                let reached_attached_session = failure.confirmed_session_id.is_some();
                 let Some(session_id) = failure
                     .confirmed_session_id
                     .or_else(|| known_session_id.clone())
@@ -89,17 +92,13 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
                     )));
                 };
 
-                if reconnecting && !reached_attached_session {
-                    return Err(ClientRunError::ReconnectFailed {
-                        session_id,
-                        source: Box::new(failure.error),
-                    });
-                }
-
                 known_session_id = Some(session_id.clone());
-                reconnecting = true;
-                eprintln!("ssh-obi: connection lost; reconnecting session {session_id}");
-                thread::sleep(RECONNECT_DELAY);
+                let delay =
+                    next_reconnect_delay(&mut reconnect_attempts, &session_id, failure.error)?;
+                eprintln!(
+                    "ssh-obi: connection lost; reconnecting session {session_id} (attempt {reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS})"
+                );
+                thread::sleep(delay);
 
                 next_args = args.clone();
                 next_args.action = ClientAction::Attach;
@@ -108,6 +107,32 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
             Err(failure) => return Err(failure.error),
         }
     }
+}
+
+fn next_reconnect_delay(
+    attempts: &mut u32,
+    session_id: &str,
+    source: ClientRunError,
+) -> Result<Duration, ClientRunError> {
+    if *attempts >= MAX_RECONNECT_ATTEMPTS {
+        return Err(ClientRunError::ReconnectAttemptsExceeded {
+            session_id: session_id.to_string(),
+            attempts: *attempts,
+            source: Box::new(source),
+        });
+    }
+
+    *attempts += 1;
+    Ok(reconnect_delay_for_attempt(*attempts))
+}
+
+fn reconnect_delay_for_attempt(attempt: u32) -> Duration {
+    let multiplier = 1u32
+        .checked_shl(attempt.saturating_sub(1))
+        .unwrap_or(u32::MAX);
+    RECONNECT_INITIAL_DELAY
+        .saturating_mul(multiplier)
+        .min(RECONNECT_MAX_DELAY)
 }
 
 fn detach_stale_client_for_reconnect(
@@ -1126,6 +1151,11 @@ pub enum ClientRunError {
         session_id: String,
         source: Box<ClientRunError>,
     },
+    ReconnectAttemptsExceeded {
+        session_id: String,
+        attempts: u32,
+        source: Box<ClientRunError>,
+    },
     ReconnectDetachFailed,
     Protocol(ProtocolError),
     InvalidSession(SessionIdError),
@@ -1177,6 +1207,16 @@ impl fmt::Display for ClientRunError {
             Self::ReconnectFailed { session_id, source } => {
                 write!(f, "failed to reconnect session {session_id}: {source}")
             }
+            Self::ReconnectAttemptsExceeded {
+                session_id,
+                attempts,
+                source,
+            } => {
+                write!(
+                    f,
+                    "failed to reconnect session {session_id} after {attempts} attempts: {source}"
+                )
+            }
             Self::ReconnectDetachFailed => write!(
                 f,
                 "failed to ask the stale attached client to detach during reconnect"
@@ -1213,6 +1253,7 @@ impl std::error::Error for ClientRunError {
             Self::InvalidSession(err) => Some(err),
             Self::ConnectionLostBeforeSessionKnown(err) => Some(err),
             Self::ReconnectFailed { source, .. } => Some(source),
+            Self::ReconnectAttemptsExceeded { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -1392,6 +1433,49 @@ mod tests {
             reconnect_busy_session(&ClientRunError::UnexpectedBrokerEof, Some("aaaaaaaa"), true)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn reconnect_delay_uses_small_capped_exponential_backoff() {
+        assert_eq!(reconnect_delay_for_attempt(1), Duration::from_millis(125));
+        assert_eq!(reconnect_delay_for_attempt(2), Duration::from_millis(250));
+        assert_eq!(reconnect_delay_for_attempt(3), Duration::from_millis(500));
+        assert_eq!(reconnect_delay_for_attempt(4), Duration::from_secs(1));
+        assert_eq!(reconnect_delay_for_attempt(5), Duration::from_secs(2));
+        assert_eq!(reconnect_delay_for_attempt(6), Duration::from_secs(2));
+        assert_eq!(reconnect_delay_for_attempt(10), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn next_reconnect_delay_allows_ten_attempts_then_fails() {
+        let mut attempts = 0;
+
+        for expected_attempt in 1..=MAX_RECONNECT_ATTEMPTS {
+            next_reconnect_delay(
+                &mut attempts,
+                "aaaaaaaa",
+                ClientRunError::UnexpectedBrokerEof,
+            )
+            .unwrap();
+            assert_eq!(attempts, expected_attempt);
+        }
+
+        let err = next_reconnect_delay(
+            &mut attempts,
+            "aaaaaaaa",
+            ClientRunError::UnexpectedBrokerEof,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ClientRunError::ReconnectAttemptsExceeded {
+                session_id,
+                attempts: MAX_RECONNECT_ATTEMPTS,
+                source,
+            } if session_id == "aaaaaaaa"
+                && matches!(*source, ClientRunError::UnexpectedBrokerEof)
+        ));
     }
 
     #[test]

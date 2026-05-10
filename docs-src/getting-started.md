@@ -23,6 +23,9 @@ the remote account. No root access is needed for the built-in install path.
 
 After installation, `ssh-obi` attaches to a new or existing session.
 
+When a new session is created, the remote host MOTD is printed before the shell
+starts, unless the remote account has `~/.hushlogin`.
+
 ## Session Selection
 
 When you connect, `ssh-obi` looks for sessions owned by the same remote user.
@@ -70,6 +73,10 @@ client reconnects and asks for the same session.
 
 If the old broker is still attached when reconnect starts, the reconnecting
 client asks that stale client to detach and then retries the attach.
+
+Reconnect retries use short exponential backoff delays: 125ms, 250ms, 500ms,
+1s, then 2s for later attempts. The client gives up after 10 reconnect
+attempts.
 
 On reattach, recent output is replayed first, then live forwarding resumes. The
 replay buffer is bounded, so old history belongs in your local terminal

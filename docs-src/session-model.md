@@ -16,6 +16,12 @@ New sessions start the remote user's shell as a login shell, using the usual
 leading-dash argv[0] convention such as `-bash` or `-zsh`. This lets shell
 startup behavior match interactive SSH more closely.
 
+Before the shell starts, new sessions print the remote host MOTD. `ssh-obi`
+prints readable non-empty `/run/motd.dynamic` and `/etc/motd` files, followed
+by readable non-empty files in `/etc/motd.d/` in filename order. A
+`~/.hushlogin` file in the remote user's home directory suppresses this MOTD
+output.
+
 New sessions also start in the remote user's home directory. `TERM` is
 forwarded from the local client when it is useful; if it is missing or `dumb`,
 `ssh-obi` uses `xterm-256color`.
@@ -44,7 +50,9 @@ session is marked current.
 During automatic reconnect, `ssh-obi` already knows the session it is trying to
 recover. If that session is still marked busy because the previous broker has
 not fully gone away, the reconnecting client asks the stale attached client to
-detach and then retries the attach.
+detach and then retries the attach. Reconnect retries use capped exponential
+backoff: 125ms, 250ms, 500ms, 1s, then 2s for later attempts, with a maximum of
+10 attempts.
 
 ## Detach
 
@@ -81,6 +89,7 @@ disconnect, it starts a fresh SSH connection and requests that same session.
 If that reconnect attempt finds the session busy, the client sends a detach
 control request for the same session and retries. Manual first-time attaches
 still report a busy session rather than detaching another client automatically.
+Reconnect retries stop after 10 attempts.
 
 The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.

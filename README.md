@@ -30,7 +30,8 @@ These clarify implementation choices that are easy to get subtly wrong:
 - **Daemon socket requests are role-specific.** A session may have at most one attached broker, but the daemon must still accept non-broker control requests while busy. Listing/info probes and detach requests are valid even when a broker is attached.
 - **Replay may duplicate recent bytes.** Reattach replays the daemon's current bounded ring buffer, and duplicates are acceptable. The implementation does not track a per-client replay cursor.
 - **Initial window size is sent before attach.** When both sides support `initial-window-size.v1`, the client sends local terminal dimensions before `AttachSession` or `NewSession`. New sessions create the PTY with that size, and reattaches apply it before replay.
-- **Ambiguous disconnects reconnect first.** If the client loses the SSH/broker connection without a graceful `ClientShouldExit` or shell-exit report, it reconnects. If the target session is still busy because the stale broker has not gone away, the reconnecting client asks that attached client to detach and retries. If the session is gone or cannot provide an exit status, the client fails rather than guessing success.
+- **New sessions print MOTD before the shell.** The daemon prints readable non-empty `/run/motd.dynamic`, `/etc/motd`, and `/etc/motd.d/*` content to the PTY before execing the login shell. A remote `~/.hushlogin` suppresses this output.
+- **Ambiguous disconnects reconnect first.** If the client loses the SSH/broker connection without a graceful `ClientShouldExit` or shell-exit report, it reconnects with capped exponential backoff: 125ms, 250ms, 500ms, 1s, then 2s, for up to 10 attempts. If the target session is still busy because the stale broker has not gone away, the reconnecting client asks that attached client to detach and retries. If the session is gone or cannot provide an exit status, the client fails rather than guessing success.
 - **Foreground command detection is best-effort only.** The daemon must not interfere with the spawned shell to improve the `WHAT` column. POSIX-ish process-group/proc-table guessing is acceptable, and failure falls back to `(unknown)`.
 - **Windows is client-only.** The Windows build can run the local `ssh-obi` client and use the system `ssh` binary, but Windows is not a supported remote server platform. Windows Terminal or another console with Windows virtual terminal input support is recommended so arrows and other line-editing keys reach the remote shell correctly.
 
@@ -98,7 +99,7 @@ When the user's shell exits normally, the daemon catches SIGCHLD, forwards the e
 
 Reconnect is **byte-stream-based**, not screen-state-based. After the first attach, the client knows the authoritative session id from `AttachedSession`; on an ambiguous disconnect it starts a fresh SSH/broker connection and requests that same session id. The new broker reattaches, the daemon replays the current ring contents and then resumes live forwarding. This can duplicate output the client already displayed before the disconnect; duplicates are acceptable. Anything older than the ring is gone — the client's terminal scrollback already has it. We do not maintain any states about terminal screens or per-client replay cursors.
 
-If the reconnect attempt reaches the daemon but gets `SessionBusy` for that same known session, the client sends a detach control request for the session and retries. First-time manual attaches still treat `SessionBusy` as a normal error and do not detach another active client automatically.
+If the reconnect attempt reaches the daemon but gets `SessionBusy` for that same known session, the client sends a detach control request for the session and retries. First-time manual attaches still treat `SessionBusy` as a normal error and do not detach another active client automatically. Reconnect retries stop after 10 attempts.
 
 ## Project layout
 
@@ -256,7 +257,8 @@ These are settled — please don't relitigate without discussion:
 - **Three modes for the server binary, dispatched in `main()`** by `--daemon` / `--detach` / no flag (broker default).
 - **Detach is out-of-band** via `$SSH_OBI_SESSION` and `$SSH_OBI_SOCKET` exported into the shell's environment. `ClientShouldExit` is the only signal the client treats as graceful (status 0, no reconnect); every other disconnect hits the reconnect loop.
 - **`SessionBusy` is the daemon-level broker-attach race arbiter.** Any second broker attach request whose first broker hasn't yet seen EOF is refused with `SessionBusy` and that requester is closed. Info/listing and detach control requests are allowed even while the session is busy. The picker's exclusion of attached sessions is UX layered on top; correctness comes from the daemon, not from coordinated clients. This means a brief window where two pickers see the same session as "free" cannot result in two clients sharing one PTY — at most one wins, the other gets a clear error.
-- **Reconnect may clear a stale busy client.** `SessionBusy` remains terminal for normal first-time attaches. In automatic reconnect, where the client already knows the authoritative target session, `SessionBusy` for that same session is treated as stale-client cleanup: the client sends a detach control request and retries the attach.
+- **Reconnect may clear a stale busy client.** `SessionBusy` remains terminal for normal first-time attaches. In automatic reconnect, where the client already knows the authoritative target session, `SessionBusy` for that same session is treated as stale-client cleanup: the client sends a detach control request and retries the attach. Reconnect attempts use 125ms, 250ms, 500ms, 1s, and then capped 2s delays, with a maximum of 10 attempts.
+- **MOTD is daemon-owned startup output.** New daemons collect `/run/motd.dynamic`, `/etc/motd`, and sorted `/etc/motd.d/*` files and write them to the PTY before shell exec. This keeps MOTD output before the prompt and ensures it is emitted once for the new session, not once per reattach. `~/.hushlogin` suppresses it.
 - **Daemon never stops reading the PTY master.** Whether attached or detached, the read loop runs continuously and feeds the bounded ring buffer. Stopping reads would let the kernel's PTY buffer fill and block the shell's writes — which would silently freeze every process that prints to the terminal. This is non-negotiable; do not introduce conditional reading "to save CPU on long detaches."
 - **Shell exit terminates the session.** When the daemon's child shell exits (any cause: normal `exit`, `kill`, OOM, SIGSEGV), the daemon catches SIGCHLD, forwards the exit code and signal info through to any attached broker so the client can mirror them, unlinks its socket, and exits. The session is gone — next `ssh-obi user@host` will not see it in the picker.
 - **Socket location: `/tmp/ssh-obi-<uid>/<session-id>.sock`.** Per-user subdir created with mode 0700, ownership-checked on reuse. Stale sockets handled via `connect()`-then-`unlink()`-on-`ECONNREFUSED`. Refuses to start on NFS/CIFS/SMB. Validates path length under 100 bytes (macOS/BSD `sun_path` cap is 104).
@@ -266,8 +268,9 @@ These are settled — please don't relitigate without discussion:
 ## Changelog
 
 See [`CHANGELOG.md`](./CHANGELOG.md). In short, `v0.1.2` adds Linux
-systemd-scope placement for PTY children when available, reconnect cleanup for
-stale attached clients, and explicit OpenBSD bootstrap guidance.
+systemd-scope placement for PTY children when available, reconnect cleanup and
+capped backoff for stale attached clients, MOTD printing before new session
+shells start, and explicit OpenBSD bootstrap guidance.
 
 ## mdBook-based obi.menhera.org site
 

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
+            window.path_to_searchindex_js = "searchindex-d972282a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -219,6 +219,10 @@ cursor.</p>
 <h2 id="old-output-is-missing-after-reconnect"><a class="header" href="#old-output-is-missing-after-reconnect">Old output is missing after reconnect</a></h2>
 <p>The session replay buffer is bounded. Old output belongs in the local terminal
 scrollback.</p>
+<h2 id="reconnect-eventually-gives-up"><a class="header" href="#reconnect-eventually-gives-up">Reconnect eventually gives up</a></h2>
+<p>Automatic reconnect uses capped exponential backoff: 125ms, 250ms, 500ms, 1s,
+then 2s for later attempts. After 10 failed reconnect attempts, <code>ssh-obi</code>
+reports failure instead of retrying forever.</p>
 <h2 id="a-session-is-busy"><a class="header" href="#a-session-is-busy">A session is busy</a></h2>
 <p>A session can have only one attached client. If another client is already
 attached, a second attach attempt gets <code>SessionBusy</code>.</p>
@@ -232,6 +236,13 @@ detach and then retries. Manual attaches still leave the busy session alone.</p>
 <pre><code class="language-sh">ssh-obi --detach --session ID user@example.com
 </code></pre>
 <p>to ask the session to detach the attached client for a known session.</p>
+<h2 id="motd-is-shown-when-a-session-starts"><a class="header" href="#motd-is-shown-when-a-session-starts">MOTD is shown when a session starts</a></h2>
+<p>New sessions print the remote host MOTD before the shell starts. This includes
+readable non-empty <code>/run/motd.dynamic</code> and <code>/etc/motd</code> files, plus readable
+non-empty files in <code>/etc/motd.d/</code>.</p>
+<p>To suppress this output for the remote account, create:</p>
+<pre><code class="language-sh">touch ~/.hushlogin
+</code></pre>
 <h2 id="a-deliberate-detach-reconnects-unexpectedly"><a class="header" href="#a-deliberate-detach-reconnects-unexpectedly">A deliberate detach reconnects unexpectedly</a></h2>
 <p>Use the in-session helper:</p>
 <pre><code class="language-sh">ssh-obi-server --detach

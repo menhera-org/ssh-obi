@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
+            window.path_to_searchindex_js = "searchindex-d972282a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -196,7 +196,8 @@ panes, tabs, or in-band escape commands. If you want window management, run
 tagged as <code>v0.1.2</code> on GitHub, and distributed as release tarballs from
 <code>https://obi.menhera.org/</code>.</p>
 <p>The <code>v0.1.2</code> release adds safer reconnect behavior for sessions whose previous
-client is still attached, explicit OpenBSD install guidance, and best-effort
+client is still attached, capped reconnect backoff, MOTD printing before new
+session shells start, explicit OpenBSD install guidance, and best-effort
 systemd cgroup separation for newly spawned PTY children on Linux. The <code>0.1</code>
 wire protocol baseline remains unchanged.</p>
 <p>The documentation on this site is the user-facing source for the published
@@ -227,6 +228,8 @@ machine:</p>
 <li>Remote output continues to be collected while you are detached.</li>
 <li>Recent output is replayed on reconnect.</li>
 <li>Some recently displayed output may appear twice after reconnect.</li>
+<li>New sessions show the remote host MOTD before the shell prompt, unless
+<code>~/.hushlogin</code> suppresses it.</li>
 <li>Windows is a client-only platform. Remote servers are Unix-like systems.</li>
 </ul>
 <h2 id="what-to-read-next"><a class="header" href="#what-to-read-next">What To Read Next</a></h2>

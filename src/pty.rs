@@ -34,6 +34,7 @@ pub fn spawn_pty_command(
     args: &[&str],
     env_overrides: &[(&str, &str)],
     cwd: Option<&str>,
+    pre_exec_output: &[u8],
     size: Option<WindowSize>,
 ) -> Result<PtyChild, PtyError> {
     use std::ffi::CString;
@@ -70,7 +71,8 @@ pub fn spawn_pty_command(
     let winsize = size.map(to_nix_winsize);
     // SAFETY: forkpty is called before this function starts any threads. The child branch only
     // performs best-effort systemd cgroup setup on Linux, applies prebuilt environment overrides,
-    // invokes execvp with prebuilt C strings, then _exit if setup or exec fails.
+    // writes prebuilt output, invokes execvp with prebuilt C strings, then _exit if setup or exec
+    // fails.
     match unsafe { nix::pty::forkpty(winsize.as_ref(), Some(&termios)) }.map_err(PtyError::Fork)? {
         ForkptyResult::Parent { child, master } => Ok(PtyChild { master, child }),
         ForkptyResult::Child => {
@@ -92,11 +94,28 @@ pub fn spawn_pty_command(
                     unsafe { nix::libc::_exit(127) };
                 }
             }
+            write_pre_exec_output(pre_exec_output);
             let _ = execvp(&program, &argv);
             // SAFETY: We are in the post-fork child and exec failed; _exit avoids running parent
             // Rust destructors in the child process.
             unsafe { nix::libc::_exit(127) };
         }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "aix")))]
+fn write_pre_exec_output(mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        let written = unsafe {
+            nix::libc::write(nix::libc::STDOUT_FILENO, bytes.as_ptr().cast(), bytes.len())
+        };
+        if written < 0 && nix::errno::Errno::last() == nix::errno::Errno::EINTR {
+            continue;
+        }
+        if written <= 0 {
+            return;
+        }
+        bytes = &bytes[written as usize..];
     }
 }
 
@@ -367,6 +386,7 @@ mod tests {
             &["-c", "printf '%s' \"$SSH_OBI_TEST_VALUE\""],
             &[("SSH_OBI_TEST_VALUE", "pty-ok")],
             None,
+            &[],
             Some(WindowSize {
                 rows: 24,
                 cols: 80,
@@ -414,6 +434,7 @@ mod tests {
             &["-c", "pwd"],
             &[],
             Some("/tmp"),
+            &[],
             Some(WindowSize {
                 rows: 24,
                 cols: 80,
@@ -440,6 +461,55 @@ mod tests {
             output.windows(4).any(|w| w == b"/tmp"),
             "pty output was {:?}",
             String::from_utf8_lossy(&output)
+        );
+
+        let status = waitpid(child.child, None).unwrap();
+        assert!(matches!(status, WaitStatus::Exited(_, 0)));
+    }
+
+    #[cfg(all(unix, not(target_os = "aix")))]
+    #[test]
+    fn spawn_pty_command_writes_pre_exec_output_before_command_output() {
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        use nix::sys::wait::{WaitStatus, waitpid};
+
+        let child = spawn_pty_command(
+            "/bin/sh",
+            None,
+            &["-c", "printf shell"],
+            &[],
+            None,
+            b"motd\n",
+            Some(WindowSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            }),
+        )
+        .unwrap();
+        let mut master = std::fs::File::from(child.master);
+        let start = Instant::now();
+        let mut output = Vec::new();
+        let mut buf = [0u8; 64];
+
+        while start.elapsed() < Duration::from_secs(2)
+            && !String::from_utf8_lossy(&output).contains("shell")
+        {
+            match master.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => output.extend_from_slice(&buf[..n]),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+
+        let output = String::from_utf8_lossy(&output);
+        assert!(
+            output.starts_with("motd\r\nshell") || output.starts_with("motd\nshell"),
+            "pty output was {output:?}"
         );
 
         let status = waitpid(child.child, None).unwrap();

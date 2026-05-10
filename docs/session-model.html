@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
+            window.path_to_searchindex_js = "searchindex-d972282a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -185,6 +185,11 @@ available.</p>
 <p>New sessions start the remote user’s shell as a login shell, using the usual
 leading-dash argv[0] convention such as <code>-bash</code> or <code>-zsh</code>. This lets shell
 startup behavior match interactive SSH more closely.</p>
+<p>Before the shell starts, new sessions print the remote host MOTD. <code>ssh-obi</code>
+prints readable non-empty <code>/run/motd.dynamic</code> and <code>/etc/motd</code> files, followed
+by readable non-empty files in <code>/etc/motd.d/</code> in filename order. A
+<code>~/.hushlogin</code> file in the remote user’s home directory suppresses this MOTD
+output.</p>
 <p>New sessions also start in the remote user’s home directory. <code>TERM</code> is
 forwarded from the local client when it is useful; if it is missing or <code>dumb</code>,
 <code>ssh-obi</code> uses <code>xterm-256color</code>.</p>
@@ -205,7 +210,9 @@ session is marked current.</p>
 <p>During automatic reconnect, <code>ssh-obi</code> already knows the session it is trying to
 recover. If that session is still marked busy because the previous broker has
 not fully gone away, the reconnecting client asks the stale attached client to
-detach and then retries the attach.</p>
+detach and then retries the attach. Reconnect retries use capped exponential
+backoff: 125ms, 250ms, 500ms, 1s, then 2s for later attempts, with a maximum of
+10 attempts.</p>
 <h2 id="detach"><a class="header" href="#detach">Detach</a></h2>
 <p>Detach means “drop the client, keep the shell”.</p>
 <p>When the network drops, the remote shell keeps running and waits for another
@@ -226,7 +233,8 @@ bytes are evicted.</p>
 disconnect, it starts a fresh SSH connection and requests that same session.</p>
 <p>If that reconnect attempt finds the session busy, the client sends a detach
 control request for the same session and retries. Manual first-time attaches
-still report a busy session rather than detaching another client automatically.</p>
+still report a busy session rather than detaching another client automatically.
+Reconnect retries stop after 10 attempts.</p>
 <p>The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.
 That is acceptable and expected.</p>

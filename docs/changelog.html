@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
+            window.path_to_searchindex_js = "searchindex-d972282a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -186,6 +186,11 @@ detaching, and falls back cleanly when systemd is unavailable.</li>
 <li>During automatic reconnect, if the target session still reports
 <code>SessionBusy</code>, the client asks the stale attached client to detach and then
 retries the reconnect.</li>
+<li>Automatic reconnect retries use a small capped exponential backoff: 125ms,
+250ms, 500ms, 1s, then 2s, with a maximum of 10 attempts.</li>
+<li>New sessions print the remote host MOTD before the shell starts, using
+<code>/run/motd.dynamic</code>, <code>/etc/motd</code>, and readable non-empty files under
+<code>/etc/motd.d/</code>. A user <code>~/.hushlogin</code> suppresses this MOTD output.</li>
 <li>The Unix bootstrap reports an explicit OpenBSD message when no compatible
 server is already installed. OpenBSD has no prebuilt release tarballs; install
 a Rust toolchain and run <code>cargo install --features server-bin ssh-obi</code>.</li>

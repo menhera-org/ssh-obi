@@ -89,6 +89,11 @@ Columns:
 
 The `WHAT` column is only a hint.
 
+New sessions print the remote host MOTD before the shell starts. The MOTD
+sources are `/run/motd.dynamic`, `/etc/motd`, and readable non-empty files in
+`/etc/motd.d/`. Create `~/.hushlogin` on the remote account to suppress this
+MOTD output.
+
 `ssh-obi-server --list` is the local server-host equivalent. It lists all alive
 sessions for the current remote user, free or busy, and includes session IDs.
 When run from inside an `ssh-obi` session, the current session is marked with
@@ -108,6 +113,9 @@ When an automatic reconnect targets a known session and that session still
 reports an attached client, `ssh-obi` sends a detach request for that same
 session and retries the attach. Normal first-time attach attempts do not detach
 busy sessions automatically.
+
+Reconnect retries use 125ms, 250ms, 500ms, 1s, and then capped 2s delays. The
+client gives up after 10 attempts.
 
 A deliberate detach through `ssh-obi-server --detach` is graceful. The client
 exits with status 0 and does not reconnect.

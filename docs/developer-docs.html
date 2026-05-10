@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
+            window.path_to_searchindex_js = "searchindex-d972282a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -281,6 +281,10 @@ are frozen once released; breaking changes require new capability names.</p>
 attach or new-session request. The broker applies the size before replay on
 reattach, and new daemons create their PTY with that size when possible. The
 protocol baseline remains <code>0.1</code>.</p>
+<p>MOTD output is local to daemon startup and does not require a wire capability.
+The daemon collects readable non-empty <code>/run/motd.dynamic</code>, <code>/etc/motd</code>, and
+sorted <code>/etc/motd.d/*</code> files unless <code>~/.hushlogin</code> exists, then writes those
+bytes to the PTY child before shell exec.</p>
 
                     </main>
 

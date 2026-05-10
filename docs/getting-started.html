@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
+            window.path_to_searchindex_js = "searchindex-d972282a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -190,6 +190,8 @@ component is missing or incompatible and a prebuilt tarball exists for the
 remote platform, <code>ssh-obi</code> asks before installing it into <code>~/.ssh-obi/bin</code> on
 the remote account. No root access is needed for the built-in install path.</p>
 <p>After installation, <code>ssh-obi</code> attaches to a new or existing session.</p>
+<p>When a new session is created, the remote host MOTD is printed before the shell
+starts, unless the remote account has <code>~/.hushlogin</code>.</p>
 <h2 id="session-selection"><a class="header" href="#session-selection">Session Selection</a></h2>
 <p>When you connect, <code>ssh-obi</code> looks for sessions owned by the same remote user.</p>
 <p>If no free session exists, a new session is created.</p>
@@ -221,6 +223,9 @@ connection disappears without a graceful detach or shell exit report, the
 client reconnects and asks for the same session.</p>
 <p>If the old broker is still attached when reconnect starts, the reconnecting
 client asks that stale client to detach and then retries the attach.</p>
+<p>Reconnect retries use short exponential backoff delays: 125ms, 250ms, 500ms,
+1s, then 2s for later attempts. The client gives up after 10 reconnect
+attempts.</p>
 <p>On reattach, recent output is replayed first, then live forwarding resumes. The
 replay buffer is bounded, so old history belongs in your local terminal
 scrollback.</p>

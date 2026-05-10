@@ -145,3 +145,8 @@ Current capability names include:
 attach or new-session request. The broker applies the size before replay on
 reattach, and new daemons create their PTY with that size when possible. The
 protocol baseline remains `0.1`.
+
+MOTD output is local to daemon startup and does not require a wire capability.
+The daemon collects readable non-empty `/run/motd.dynamic`, `/etc/motd`, and
+sorted `/etc/motd.d/*` files unless `~/.hushlogin` exists, then writes those
+bytes to the PTY child before shell exec.

@@ -26,7 +26,8 @@ tagged as `v0.1.2` on GitHub, and distributed as release tarballs from
 `https://obi.menhera.org/`.
 
 The `v0.1.2` release adds safer reconnect behavior for sessions whose previous
-client is still attached, explicit OpenBSD install guidance, and best-effort
+client is still attached, capped reconnect backoff, MOTD printing before new
+session shells start, explicit OpenBSD install guidance, and best-effort
 systemd cgroup separation for newly spawned PTY children on Linux. The `0.1`
 wire protocol baseline remains unchanged.
 
@@ -78,6 +79,8 @@ ssh-obi-server --detach
 - Remote output continues to be collected while you are detached.
 - Recent output is replayed on reconnect.
 - Some recently displayed output may appear twice after reconnect.
+- New sessions show the remote host MOTD before the shell prompt, unless
+  `~/.hushlogin` suppresses it.
 - Windows is a client-only platform. Remote servers are Unix-like systems.
 
 ## What To Read Next

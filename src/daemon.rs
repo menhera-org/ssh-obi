@@ -138,6 +138,7 @@ mod runtime {
         let shell = shell_to_spawn();
         let shell_argv0 = login_shell_argv0(&shell);
         let home = home_to_spawn();
+        let motd = motd_to_print(&home);
         let term = term_to_spawn();
         let pty = spawn_pty_command(
             &shell,
@@ -151,6 +152,7 @@ mod runtime {
                 ("TERM", &term),
             ],
             Some(&home),
+            &motd,
             initial_window_size,
         )?;
         let master_write = nix::unistd::dup(pty.master.as_fd()).map_err(DaemonError::DupPty)?;
@@ -551,6 +553,56 @@ mod runtime {
         }
     }
 
+    fn motd_to_print(home: &str) -> Vec<u8> {
+        motd_to_print_from(
+            PathBuf::from(home).join(".hushlogin"),
+            [
+                PathBuf::from("/run/motd.dynamic"),
+                PathBuf::from("/etc/motd"),
+            ],
+            PathBuf::from("/etc/motd.d"),
+        )
+    }
+
+    fn motd_to_print_from<const N: usize>(
+        hushlogin: PathBuf,
+        files: [PathBuf; N],
+        motd_dir: PathBuf,
+    ) -> Vec<u8> {
+        if hushlogin.is_file() {
+            return Vec::new();
+        }
+
+        let mut output = Vec::new();
+        for file in files {
+            append_motd_file(&mut output, file);
+        }
+
+        let Ok(entries) = fs::read_dir(motd_dir) else {
+            return output;
+        };
+        let mut entries = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        entries.sort();
+        for file in entries {
+            append_motd_file(&mut output, file);
+        }
+
+        output
+    }
+
+    fn append_motd_file(output: &mut Vec<u8>, path: PathBuf) {
+        if !fs::metadata(&path).is_ok_and(|metadata| metadata.len() > 0) {
+            return;
+        }
+
+        if let Ok(bytes) = fs::read(path) {
+            output.extend_from_slice(&bytes);
+        }
+    }
+
     fn login_shell_argv0(shell: &str) -> String {
         let shell_path = PathBuf::from(shell);
         let name = shell_path
@@ -743,6 +795,55 @@ mod runtime {
                 term_to_spawn_from(Some("screen-256color")),
                 "screen-256color"
             );
+        }
+
+        #[test]
+        fn motd_to_print_concatenates_readable_nonempty_files() {
+            let root = temp_test_dir("motd");
+            let hushlogin = root.join("home").join(".hushlogin");
+            let file_a = root.join("run-motd");
+            let file_b = root.join("etc-motd");
+            let motd_dir = root.join("motd.d");
+            fs::create_dir_all(hushlogin.parent().unwrap()).unwrap();
+            fs::create_dir_all(&motd_dir).unwrap();
+            fs::write(&file_a, b"dynamic\n").unwrap();
+            fs::write(&file_b, b"static\n").unwrap();
+            fs::write(motd_dir.join("20-later"), b"later\n").unwrap();
+            fs::write(motd_dir.join("10-first"), b"first\n").unwrap();
+            fs::write(motd_dir.join("30-empty"), b"").unwrap();
+
+            let output = motd_to_print_from(hushlogin, [file_a, file_b], motd_dir);
+
+            assert_eq!(output, b"dynamic\nstatic\nfirst\nlater\n");
+            let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn motd_to_print_honors_hushlogin() {
+            let root = temp_test_dir("motd-hushlogin");
+            let home = root.join("home");
+            let file = root.join("motd");
+            let motd_dir = root.join("motd.d");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&motd_dir).unwrap();
+            fs::write(home.join(".hushlogin"), b"").unwrap();
+            fs::write(&file, b"hidden\n").unwrap();
+
+            let output = motd_to_print_from(home.join(".hushlogin"), [file], motd_dir);
+
+            assert!(output.is_empty());
+            let _ = fs::remove_dir_all(root);
+        }
+
+        fn temp_test_dir(name: &str) -> PathBuf {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            std::env::temp_dir().join(format!(
+                "ssh-obi-daemon-{name}-{}-{unique}",
+                std::process::id()
+            ))
         }
     }
 }

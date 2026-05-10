@@ -4,3 +4,4 @@
 .env
 .codex
 /release-*.tar.gz
+.claude

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-89fc36d8.js";
+            window.path_to_searchindex_js = "searchindex-d972282a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -197,7 +197,8 @@ panes, tabs, or in-band escape commands. If you want window management, run
 tagged as <code>v0.1.2</code> on GitHub, and distributed as release tarballs from
 <code>https://obi.menhera.org/</code>.</p>
 <p>The <code>v0.1.2</code> release adds safer reconnect behavior for sessions whose previous
-client is still attached, explicit OpenBSD install guidance, and best-effort
+client is still attached, capped reconnect backoff, MOTD printing before new
+session shells start, explicit OpenBSD install guidance, and best-effort
 systemd cgroup separation for newly spawned PTY children on Linux. The <code>0.1</code>
 wire protocol baseline remains unchanged.</p>
 <p>The documentation on this site is the user-facing source for the published
@@ -228,6 +229,8 @@ machine:</p>
 <li>Remote output continues to be collected while you are detached.</li>
 <li>Recent output is replayed on reconnect.</li>
 <li>Some recently displayed output may appear twice after reconnect.</li>
+<li>New sessions show the remote host MOTD before the shell prompt, unless
+<code>~/.hushlogin</code> suppresses it.</li>
 <li>Windows is a client-only platform. Remote servers are Unix-like systems.</li>
 </ul>
 <h2 id="what-to-read-next"><a class="header" href="#what-to-read-next">What To Read Next</a></h2>
@@ -258,6 +261,8 @@ component is missing or incompatible and a prebuilt tarball exists for the
 remote platform, <code>ssh-obi</code> asks before installing it into <code>~/.ssh-obi/bin</code> on
 the remote account. No root access is needed for the built-in install path.</p>
 <p>After installation, <code>ssh-obi</code> attaches to a new or existing session.</p>
+<p>When a new session is created, the remote host MOTD is printed before the shell
+starts, unless the remote account has <code>~/.hushlogin</code>.</p>
 <h2 id="session-selection"><a class="header" href="#session-selection">Session Selection</a></h2>
 <p>When you connect, <code>ssh-obi</code> looks for sessions owned by the same remote user.</p>
 <p>If no free session exists, a new session is created.</p>
@@ -289,6 +294,9 @@ connection disappears without a graceful detach or shell exit report, the
 client reconnects and asks for the same session.</p>
 <p>If the old broker is still attached when reconnect starts, the reconnecting
 client asks that stale client to detach and then retries the attach.</p>
+<p>Reconnect retries use short exponential backoff delays: 125ms, 250ms, 500ms,
+1s, then 2s for later attempts. The client gives up after 10 reconnect
+attempts.</p>
 <p>On reattach, recent output is replayed first, then live forwarding resumes. The
 replay buffer is bounded, so old history belongs in your local terminal
 scrollback.</p>
@@ -473,6 +481,10 @@ are not assigned picker numbers.</p>
 <li><code>WHAT</code>: best-effort foreground command detected for the session.</li>
 </ul>
 <p>The <code>WHAT</code> column is only a hint.</p>
+<p>New sessions print the remote host MOTD before the shell starts. The MOTD
+sources are <code>/run/motd.dynamic</code>, <code>/etc/motd</code>, and readable non-empty files in
+<code>/etc/motd.d/</code>. Create <code>~/.hushlogin</code> on the remote account to suppress this
+MOTD output.</p>
 <p><code>ssh-obi-server --list</code> is the local server-host equivalent. It lists all alive
 sessions for the current remote user, free or busy, and includes session IDs.
 When run from inside an <code>ssh-obi</code> session, the current session is marked with
@@ -488,6 +500,8 @@ recovered, the client reports failure rather than guessing success.</p>
 reports an attached client, <code>ssh-obi</code> sends a detach request for that same
 session and retries the attach. Normal first-time attach attempts do not detach
 busy sessions automatically.</p>
+<p>Reconnect retries use 125ms, 250ms, 500ms, 1s, and then capped 2s delays. The
+client gives up after 10 attempts.</p>
 <p>A deliberate detach through <code>ssh-obi-server --detach</code> is graceful. The client
 exits with status 0 and does not reconnect.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -502,6 +516,11 @@ available.</p>
 <p>New sessions start the remote user’s shell as a login shell, using the usual
 leading-dash argv[0] convention such as <code>-bash</code> or <code>-zsh</code>. This lets shell
 startup behavior match interactive SSH more closely.</p>
+<p>Before the shell starts, new sessions print the remote host MOTD. <code>ssh-obi</code>
+prints readable non-empty <code>/run/motd.dynamic</code> and <code>/etc/motd</code> files, followed
+by readable non-empty files in <code>/etc/motd.d/</code> in filename order. A
+<code>~/.hushlogin</code> file in the remote user’s home directory suppresses this MOTD
+output.</p>
 <p>New sessions also start in the remote user’s home directory. <code>TERM</code> is
 forwarded from the local client when it is useful; if it is missing or <code>dumb</code>,
 <code>ssh-obi</code> uses <code>xterm-256color</code>.</p>
@@ -522,7 +541,9 @@ session is marked current.</p>
 <p>During automatic reconnect, <code>ssh-obi</code> already knows the session it is trying to
 recover. If that session is still marked busy because the previous broker has
 not fully gone away, the reconnecting client asks the stale attached client to
-detach and then retries the attach.</p>
+detach and then retries the attach. Reconnect retries use capped exponential
+backoff: 125ms, 250ms, 500ms, 1s, then 2s for later attempts, with a maximum of
+10 attempts.</p>
 <h2 id="detach"><a class="header" href="#detach">Detach</a></h2>
 <p>Detach means “drop the client, keep the shell”.</p>
 <p>When the network drops, the remote shell keeps running and waits for another
@@ -543,7 +564,8 @@ bytes are evicted.</p>
 disconnect, it starts a fresh SSH connection and requests that same session.</p>
 <p>If that reconnect attempt finds the session busy, the client sends a detach
 control request for the same session and retries. Manual first-time attaches
-still report a busy session rather than detaching another client automatically.</p>
+still report a busy session rather than detaching another client automatically.
+Reconnect retries stop after 10 attempts.</p>
 <p>The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.
 That is acceptable and expected.</p>
@@ -666,6 +688,10 @@ cursor.</p>
 <h2 id="old-output-is-missing-after-reconnect"><a class="header" href="#old-output-is-missing-after-reconnect">Old output is missing after reconnect</a></h2>
 <p>The session replay buffer is bounded. Old output belongs in the local terminal
 scrollback.</p>
+<h2 id="reconnect-eventually-gives-up"><a class="header" href="#reconnect-eventually-gives-up">Reconnect eventually gives up</a></h2>
+<p>Automatic reconnect uses capped exponential backoff: 125ms, 250ms, 500ms, 1s,
+then 2s for later attempts. After 10 failed reconnect attempts, <code>ssh-obi</code>
+reports failure instead of retrying forever.</p>
 <h2 id="a-session-is-busy"><a class="header" href="#a-session-is-busy">A session is busy</a></h2>
 <p>A session can have only one attached client. If another client is already
 attached, a second attach attempt gets <code>SessionBusy</code>.</p>
@@ -679,6 +705,13 @@ detach and then retries. Manual attaches still leave the busy session alone.</p>
 <pre><code class="language-sh">ssh-obi --detach --session ID user@example.com
 </code></pre>
 <p>to ask the session to detach the attached client for a known session.</p>
+<h2 id="motd-is-shown-when-a-session-starts"><a class="header" href="#motd-is-shown-when-a-session-starts">MOTD is shown when a session starts</a></h2>
+<p>New sessions print the remote host MOTD before the shell starts. This includes
+readable non-empty <code>/run/motd.dynamic</code> and <code>/etc/motd</code> files, plus readable
+non-empty files in <code>/etc/motd.d/</code>.</p>
+<p>To suppress this output for the remote account, create:</p>
+<pre><code class="language-sh">touch ~/.hushlogin
+</code></pre>
 <h2 id="a-deliberate-detach-reconnects-unexpectedly"><a class="header" href="#a-deliberate-detach-reconnects-unexpectedly">A deliberate detach reconnects unexpectedly</a></h2>
 <p>Use the in-session helper:</p>
 <pre><code class="language-sh">ssh-obi-server --detach
@@ -705,6 +738,11 @@ detaching, and falls back cleanly when systemd is unavailable.</li>
 <li>During automatic reconnect, if the target session still reports
 <code>SessionBusy</code>, the client asks the stale attached client to detach and then
 retries the reconnect.</li>
+<li>Automatic reconnect retries use a small capped exponential backoff: 125ms,
+250ms, 500ms, 1s, then 2s, with a maximum of 10 attempts.</li>
+<li>New sessions print the remote host MOTD before the shell starts, using
+<code>/run/motd.dynamic</code>, <code>/etc/motd</code>, and readable non-empty files under
+<code>/etc/motd.d/</code>. A user <code>~/.hushlogin</code> suppresses this MOTD output.</li>
 <li>The Unix bootstrap reports an explicit OpenBSD message when no compatible
 server is already installed. OpenBSD has no prebuilt release tarballs; install
 a Rust toolchain and run <code>cargo install --features server-bin ssh-obi</code>.</li>
@@ -866,6 +904,10 @@ are frozen once released; breaking changes require new capability names.</p>
 attach or new-session request. The broker applies the size before replay on
 reattach, and new daemons create their PTY with that size when possible. The
 protocol baseline remains <code>0.1</code>.</p>
+<p>MOTD output is local to daemon startup and does not require a wire capability.
+The daemon collects readable non-empty <code>/run/motd.dynamic</code>, <code>/etc/motd</code>, and
+sorted <code>/etc/motd.d/*</code> files unless <code>~/.hushlogin</code> exists, then writes those
+bytes to the PTY child before shell exec.</p>
 
                     </main>
 

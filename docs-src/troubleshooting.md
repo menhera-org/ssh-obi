@@ -71,6 +71,12 @@ cursor.
 The session replay buffer is bounded. Old output belongs in the local terminal
 scrollback.
 
+## Reconnect eventually gives up
+
+Automatic reconnect uses capped exponential backoff: 125ms, 250ms, 500ms, 1s,
+then 2s for later attempts. After 10 failed reconnect attempts, `ssh-obi`
+reports failure instead of retrying forever.
+
 ## A session is busy
 
 A session can have only one attached client. If another client is already
@@ -93,6 +99,18 @@ ssh-obi --detach --session ID user@example.com
 ```
 
 to ask the session to detach the attached client for a known session.
+
+## MOTD is shown when a session starts
+
+New sessions print the remote host MOTD before the shell starts. This includes
+readable non-empty `/run/motd.dynamic` and `/etc/motd` files, plus readable
+non-empty files in `/etc/motd.d/`.
+
+To suppress this output for the remote account, create:
+
+```sh
+touch ~/.hushlogin
+```
 
 ## A deliberate detach reconnects unexpectedly
 
