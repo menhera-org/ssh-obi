@@ -71,6 +71,28 @@ cursor.
 The session replay buffer is bounded. Old output belongs in the local terminal
 scrollback.
 
+## Typing feels softer than plain SSH
+
+`ssh-obi` is designed to stay close to plain SSH, but the interactive path is
+not byte-for-byte identical to an OpenSSH client attached directly to a remote
+PTY.
+
+Input travels through the local `ssh-obi` client, the system `ssh` process, the
+remote broker, a Unix-domain socket, and the per-session daemon before it reaches
+the remote PTY. Output returns through the same layers in reverse. Each layer
+flushes promptly, and there is no intentional long sleep in the hot path.
+
+On Unix clients, `ssh-obi` does intentionally coalesce immediately pending
+stdin bytes for a very short window before framing and sending them. This keeps
+paste and bursty input from becoming one protocol frame per byte, but it can add
+up to about 2 ms before an isolated keystroke is sent. That small batching
+window, plus normal SSH, network, scheduler, and terminal latency, can feel a
+little softer than direct SSH on very low-latency links.
+
+This behavior is a latency/throughput tradeoff, not a correctness issue. It
+does not change the bytes the remote shell receives, introduce in-band escape
+commands, or change reconnect/replay semantics.
+
 ## Reconnect eventually gives up
 
 Automatic reconnect uses capped exponential backoff: 125ms, 250ms, 500ms, 1s,

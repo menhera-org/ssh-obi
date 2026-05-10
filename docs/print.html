@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4264409a.js";
+            window.path_to_searchindex_js = "searchindex-61b04a7d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -686,6 +686,23 @@ cursor.</p>
 <h2 id="old-output-is-missing-after-reconnect"><a class="header" href="#old-output-is-missing-after-reconnect">Old output is missing after reconnect</a></h2>
 <p>The session replay buffer is bounded. Old output belongs in the local terminal
 scrollback.</p>
+<h2 id="typing-feels-softer-than-plain-ssh"><a class="header" href="#typing-feels-softer-than-plain-ssh">Typing feels softer than plain SSH</a></h2>
+<p><code>ssh-obi</code> is designed to stay close to plain SSH, but the interactive path is
+not byte-for-byte identical to an OpenSSH client attached directly to a remote
+PTY.</p>
+<p>Input travels through the local <code>ssh-obi</code> client, the system <code>ssh</code> process, the
+remote broker, a Unix-domain socket, and the per-session daemon before it reaches
+the remote PTY. Output returns through the same layers in reverse. Each layer
+flushes promptly, and there is no intentional long sleep in the hot path.</p>
+<p>On Unix clients, <code>ssh-obi</code> does intentionally coalesce immediately pending
+stdin bytes for a very short window before framing and sending them. This keeps
+paste and bursty input from becoming one protocol frame per byte, but it can add
+up to about 2 ms before an isolated keystroke is sent. That small batching
+window, plus normal SSH, network, scheduler, and terminal latency, can feel a
+little softer than direct SSH on very low-latency links.</p>
+<p>This behavior is a latency/throughput tradeoff, not a correctness issue. It
+does not change the bytes the remote shell receives, introduce in-band escape
+commands, or change reconnect/replay semantics.</p>
 <h2 id="reconnect-eventually-gives-up"><a class="header" href="#reconnect-eventually-gives-up">Reconnect eventually gives up</a></h2>
 <p>Automatic reconnect uses capped exponential backoff: 125ms, 250ms, 500ms, 1s,
 then 2s for later attempts. After 10 failed reconnect attempts, <code>ssh-obi</code>
