@@ -4,7 +4,7 @@
 
 The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
 
-**Status:** the crate version is `v0.2.0`. The `0.1` wire-protocol baseline remains compatible; features continue to be negotiated through `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1`/`initial-window-size.v1` capabilities.
+**Status:** the crate version is `v0.2.1`. The `0.1` wire-protocol baseline remains compatible; features continue to be negotiated through `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1`/`initial-window-size.v1` capabilities.
 
 ## What it is
 
@@ -270,7 +270,7 @@ These are settled — please don't relitigate without discussion:
 
 ## Changelog
 
-See [`CHANGELOG.md`](./CHANGELOG.md). `v0.2.0` adds durable interactive
+See [`CHANGELOG.md`](./CHANGELOG.md). `v0.2.1` adds durable interactive
 reconnection, session takeover with `--detach-connect`, version-aware remote
 bootstrap, and correct login-shell umask inheritance.
 

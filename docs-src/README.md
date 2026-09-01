@@ -21,7 +21,7 @@ panes, tabs, or in-band escape commands. If you want window management, run
 
 ## Status
 
-The crate version is `v0.2.0`. It adds durable interactive reconnection,
+The crate version is `v0.2.1`. It adds durable interactive reconnection,
 session takeover, version-aware remote bootstrap, and correct login-shell umask
 inheritance. The `0.1` wire-protocol baseline remains compatible.
 

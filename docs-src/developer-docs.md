@@ -57,7 +57,7 @@ Pages after each build:
 
 ## Release Builds
 
-The crate version is `v0.2.0`. The wire-protocol baseline remains `0.1`.
+The crate version is `v0.2.1`. The wire-protocol baseline remains `0.1`.
 Release tarballs for the bootstrap installers are served from
 `https://obi.menhera.org/`.
 

@@ -20,7 +20,7 @@
 - During reconnect and stale-client cleanup, the session stdin reader pauses and
   the local terminal returns to its normal mode so OpenSSH authentication and
   host-key prompts can interact with the user safely.
-- The crate version is now `0.2.0`. The wire-protocol baseline remains `0.1`.
+- The crate version is now `0.2.1`. The wire-protocol baseline remains `0.1`.
 - The `server-bin` feature is enabled by default so `cargo install ssh-obi`
   installs `ssh-obi-server`, including on OpenBSD where no prebuilt archive is
   available.

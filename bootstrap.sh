@@ -168,9 +168,12 @@ esac
 archive_url="${base_url}/release-${target}.tar.gz"
 tmp="${TMPDIR:-/tmp}/ssh-obi-install.$$"
 archive="${tmp}/release.tar.gz"
+server_install_tmp="${managed_server}.new.$$"
+client_install_tmp="${bin_dir}/ssh-obi.new.$$"
 
 cleanup() {
     rm -rf "$tmp"
+    rm -f "$server_install_tmp" "$client_install_tmp"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -197,13 +200,15 @@ if [ ! -f "${tmp}/ssh-obi-server" ]; then
 fi
 
 mkdir -p "$bin_dir"
-cp "${tmp}/ssh-obi-server" "${bin_dir}/ssh-obi-server"
+cp "${tmp}/ssh-obi-server" "$server_install_tmp"
+chmod 755 "$server_install_tmp"
 if [ -f "${tmp}/ssh-obi" ]; then
-    cp "${tmp}/ssh-obi" "${bin_dir}/ssh-obi"
+    cp "${tmp}/ssh-obi" "$client_install_tmp"
+    chmod 755 "$client_install_tmp"
 fi
-chmod 755 "${bin_dir}/ssh-obi-server"
-if [ -f "${bin_dir}/ssh-obi" ]; then
-    chmod 755 "${bin_dir}/ssh-obi"
+mv -f "$server_install_tmp" "$managed_server"
+if [ -f "$client_install_tmp" ]; then
+    mv -f "$client_install_tmp" "${bin_dir}/ssh-obi"
 fi
 
 path_line='export PATH="$HOME/.ssh-obi/bin:$PATH"'

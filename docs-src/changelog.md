@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.0
+## v0.2.1
 
 The wire-protocol baseline remains `0.1`.
 
