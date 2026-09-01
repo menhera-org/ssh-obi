@@ -68,6 +68,13 @@ ssh-obi-server --detach
 This detaches the client. The shell keeps running. The local client exits with
 status 0 and does not reconnect.
 
+To detach another session on the same server account, first run
+`ssh-obi-server --list`, then use its ID:
+
+```sh
+ssh-obi-server --detach --session ID
+```
+
 Closing the laptop, losing Wi-Fi, or killing the local SSH connection is
 different: the client treats that as ambiguous and attempts to reconnect.
 

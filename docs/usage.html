@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-93db2160.js";
+            window.path_to_searchindex_js = "searchindex-dc3f6096.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -183,7 +183,7 @@
 <pre><code class="language-sh">ssh-obi --new user@example.com
 </code></pre>
 <p>Attach to a specific session:</p>
-<pre><code class="language-sh">ssh-obi --session abc123 user@example.com
+<pre><code class="language-sh">ssh-obi --session aaaaaaaa user@example.com
 </code></pre>
 <p>List sessions and exit:</p>
 <pre><code class="language-sh">ssh-obi --list user@example.com
@@ -191,14 +191,17 @@
 <p>List sessions directly on the server host:</p>
 <pre><code class="language-sh">ssh-obi-server --list
 </code></pre>
+<p>Detach the attached client for a listed session on the server host:</p>
+<pre><code class="language-sh">ssh-obi-server --detach --session aaaaaaaa
+</code></pre>
 <p>Detach the attached client for a specific session and exit:</p>
-<pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
+<pre><code class="language-sh">ssh-obi --detach --session aaaaaaaa user@example.com
 </code></pre>
 <p>Detach an existing client and connect to that session:</p>
 <pre><code class="language-sh">ssh-obi --detach-connect user@example.com
 </code></pre>
 <p>The only session is selected automatically. If several sessions exist, a
-selector includes both busy and free sessions. <code>--session abc123</code> overrides
+selector includes both busy and free sessions. <code>--session aaaaaaaa</code> overrides
 selection.</p>
 <p>Print the client package version and exit:</p>
 <pre><code class="language-sh">ssh-obi --obi-version
@@ -247,7 +250,9 @@ MOTD output.</p>
 sessions for the current remote user, free or busy, and includes session IDs.
 When run from inside an <code>ssh-obi</code> session, the current session is marked with
 <code>*</code> in the <code>CUR</code> column. When run outside an <code>ssh-obi</code> session, no row is
-marked current.</p>
+marked current. Use <code>ssh-obi-server --detach --session ID</code> to detach the
+attached client from any listed session, including a non-current session. This
+does not terminate the remote shell.</p>
 <h2 id="when-the-remote-shell-exits"><a class="header" href="#when-the-remote-shell-exits">When The Remote Shell Exits</a></h2>
 <p>If the remote shell exits while attached, the local client mirrors the exit
 status where possible.</p>

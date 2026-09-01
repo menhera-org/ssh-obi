@@ -17,7 +17,7 @@ ssh-obi --new user@example.com
 Attach to a specific session:
 
 ```sh
-ssh-obi --session abc123 user@example.com
+ssh-obi --session aaaaaaaa user@example.com
 ```
 
 List sessions and exit:
@@ -32,10 +32,16 @@ List sessions directly on the server host:
 ssh-obi-server --list
 ```
 
+Detach the attached client for a listed session on the server host:
+
+```sh
+ssh-obi-server --detach --session aaaaaaaa
+```
+
 Detach the attached client for a specific session and exit:
 
 ```sh
-ssh-obi --detach --session abc123 user@example.com
+ssh-obi --detach --session aaaaaaaa user@example.com
 ```
 
 Detach an existing client and connect to that session:
@@ -45,7 +51,7 @@ ssh-obi --detach-connect user@example.com
 ```
 
 The only session is selected automatically. If several sessions exist, a
-selector includes both busy and free sessions. `--session abc123` overrides
+selector includes both busy and free sessions. `--session aaaaaaaa` overrides
 selection.
 
 Print the client package version and exit:
@@ -114,7 +120,9 @@ MOTD output.
 sessions for the current remote user, free or busy, and includes session IDs.
 When run from inside an `ssh-obi` session, the current session is marked with
 `*` in the `CUR` column. When run outside an `ssh-obi` session, no row is
-marked current.
+marked current. Use `ssh-obi-server --detach --session ID` to detach the
+attached client from any listed session, including a non-current session. This
+does not terminate the remote shell.
 
 ## When The Remote Shell Exits
 

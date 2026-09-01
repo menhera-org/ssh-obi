@@ -4,7 +4,7 @@
 
 The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
 
-**Status:** the crate version is `v0.3.0`. It adds automatic negotiated keepalive while retaining compatibility with the `0.1` wire-protocol baseline. Features continue to be negotiated through `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1`/`initial-window-size.v1`/`keepalive.v1` capabilities.
+**Status:** the crate version is `v0.3.1`. It adds server-local targeted detach while retaining compatibility with the `0.1` wire-protocol baseline. Features continue to be negotiated through `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1`/`initial-window-size.v1`/`keepalive.v1` capabilities.
 
 ## What it is
 
@@ -42,12 +42,13 @@ Three process roles on the remote:
 
 1. **Daemon** (`ssh-obi-server --daemon`) — owns one PTY master and one user shell. One daemon per session. Long-lived; daemonizes itself and is not managed through any required system service. Listens on a UNIX-domain socket at `/tmp/ssh-obi-<uid>/<session-id>.sock`. Tracks: init time, last-detach time, attached state, and the current foreground command on its PTY.
 2. **Broker** (`ssh-obi-server`, no flag) — short-lived, spawned by SSH inside the login session. Bridges SSH stdio ↔ a chosen daemon's UNIX socket. Dies when SSH disconnects; the daemon does not.
-3. **Detach helper** (`ssh-obi-server --detach`) — short-lived, run inside a remote session by the user. Reads `$SSH_OBI_SOCKET` from its environment, connects to the daemon as a control requester, sends `Detach`, exits.
+3. **Detach helper** (`ssh-obi-server --detach`) — short-lived control command. With no session argument, it reads `$SSH_OBI_SOCKET` from the current remote shell; with `--session ID`, it resolves that same user's daemon socket on the server host. It sends `Detach` and exits.
 
 `ssh-obi-server --list` is a local control command for the server host. It
 enumerates alive sessions for the current Unix user, free or busy. When run
 inside an `ssh-obi` session, the current session is marked with `*`; outside an
-`ssh-obi` session, no row is marked current.
+`ssh-obi` session, no row is marked current. A listed session can be detached
+with `ssh-obi-server --detach --session ID`, including a non-current session.
 
 ### Session selection on connect
 
@@ -81,6 +82,7 @@ A session is "free" when no broker is currently attached. Attached sessions are 
 - `ssh-obi --detach-connect user@host` — take over the only existing session, or select one when several exist; `--session ID` overrides selection.
 - `ssh-obi --obi-version` — print the local crate version and exit.
 - `ssh-obi-server --list` — list alive sessions directly on the server host, marking the current session when run inside one.
+- `ssh-obi-server --detach --session ID` — detach a listed session's attached client directly on the server host.
 
 When prompting for a normal attach, free sessions are numbered and selectable; busy sessions are shown for awareness but remain unnumbered. The `--detach-connect` takeover picker numbers both free and busy sessions. Sessions that have never detached display `-` in the `DETACH` column. Picker timestamps are rendered in the client's local time.
 
@@ -92,7 +94,7 @@ When the broker exits (network drop, or `ssh-obi-server --detach`), the daemon's
 
 The daemon **continues draining the PTY master fd at all times**, attached or not. This is not optional: if the daemon ever stops reading, the kernel's PTY buffer fills, and the shell blocks on its next `write()` — which would effectively pause every running process whose output reaches the terminal. So during detach, output is read continuously and appended to the same bounded ring buffer (default 64 KiB) used for replay. When the ring fills, oldest bytes are evicted. On reattach, the ring's current contents are replayed to the new broker, then live forwarding resumes.
 
-`ssh-obi-server --detach` differs from a network drop by sending a `Detach` control request to the daemon even though the broker is still attached. The daemon then sends `ClientShouldExit` to the broker before closing the broker connection. The client treats `ClientShouldExit` as graceful (status 0, no reconnect). All other disconnections hit the reconnect loop. During reconnect, a `SessionBusy` response for the known target session triggers a detach request to clear the stale attached client before retrying. Getting this asymmetry right is load-bearing.
+`ssh-obi-server --detach` differs from a network drop by sending a `Detach` control request to the daemon even though the broker is still attached. Bare `--detach` uses the current shell's environment; `--detach --session ID` targets that same user's named session on the server host. The daemon then sends `ClientShouldExit` to the broker before closing the broker connection. The client treats `ClientShouldExit` as graceful (status 0, no reconnect). All other disconnections hit the reconnect loop. During reconnect, a `SessionBusy` response for the known target session triggers a detach request to clear the stale attached client before retrying. Getting this asymmetry right is load-bearing.
 
 ### Shell exit
 
@@ -132,7 +134,7 @@ ssh-obi/
         ├── ssh-obi/
         │   └── main.rs             # client: arg parsing, SSH spawn, raw-mode TTY, picker UI, reconnect loop
         └── ssh-obi-server/
-            └── main.rs             # broker (default), daemon (--daemon), detach helper (--detach)
+            └── main.rs             # broker, daemon, list, and detach control modes
 ```
 
 ## Wire protocol
@@ -257,8 +259,8 @@ These are settled — please don't relitigate without discussion:
 - **Session IDs are server-generated**, short (8–10 chars of base32-encoded blake3 over high-resolution monotonic time + random nonce), and unique within a user's session set on a given remote. *Not* derived from client identity — that would be incompatible with multi-machine selection.
 - **Sessions are user-namespaced on the remote.** Any client authenticating as the same remote user can list and attach to that user's free sessions, regardless of which workstation it's coming from.
 - **"WHAT" column** in the picker is a best-effort guess at the current foreground process for the session's PTY, using POSIX-ish process-group and per-OS process-info lookup where available. Do not instrument, wrap, or otherwise interfere with the spawned shell to improve this value. Falls back to `(unknown)` on platforms where lookup fails.
-- **Three modes for the server binary, dispatched in `main()`** by `--daemon` / `--detach` / no flag (broker default).
-- **Detach is out-of-band** via `$SSH_OBI_SESSION` and `$SSH_OBI_SOCKET` exported into the shell's environment. `ClientShouldExit` is the only signal the client treats as graceful (status 0, no reconnect); every other disconnect hits the reconnect loop.
+- **Server control modes are dispatched in `main()`** by `--daemon`, `--list`, `--detach`, or no flag (broker default).
+- **Detach is out-of-band.** Bare `ssh-obi-server --detach` uses `$SSH_OBI_SOCKET` exported into the current shell's environment. Adding `--session ID` resolves the named daemon in the current Unix user's socket directory, allowing a non-current session to be detached. `ClientShouldExit` is the only signal the client treats as graceful (status 0, no reconnect); every other disconnect hits the reconnect loop.
 - **`SessionBusy` is the daemon-level broker-attach race arbiter.** Any second broker attach request whose first broker hasn't yet seen EOF is refused with `SessionBusy` and that requester is closed. Info/listing and detach control requests are allowed even while the session is busy. The picker's exclusion of attached sessions is UX layered on top; correctness comes from the daemon, not from coordinated clients. This means a brief window where two pickers see the same session as "free" cannot result in two clients sharing one PTY — at most one wins, the other gets a clear error.
 - **Reconnect may clear a stale busy client.** `SessionBusy` remains terminal for normal first-time attaches. In automatic reconnect, where the client already knows the authoritative target session, `SessionBusy` for that same session is treated as stale-client cleanup: the client sends a detach control request and retries the attach. Reconnect attempts use 1s, 2s, 4s, 8s, 16s, 32s, 64s, and then capped 120s delays without an attempt limit. Transport failures during reconnect and stale-client cleanup remain retryable, while definitive remote and protocol errors remain terminal.
 - **MOTD is daemon-owned startup output.** New daemons collect `/run/motd.dynamic`, `/etc/motd`, and sorted `/etc/motd.d/*` files and write them to the PTY before shell exec. This keeps MOTD output before the prompt and ensures it is emitted once for the new session, not once per reattach. `~/.hushlogin` suppresses it.
@@ -271,9 +273,9 @@ These are settled — please don't relitigate without discussion:
 
 ## Changelog
 
-See [`CHANGELOG.md`](./CHANGELOG.md). `v0.3.0` adds automatic negotiated
-keepalive so dead connections are detected, stale broker attachments are
-released, and reconnect begins without user-supplied SSH options.
+See [`CHANGELOG.md`](./CHANGELOG.md). `v0.3.1` adds
+`ssh-obi-server --detach --session ID` for detaching a session selected from
+the server-local session list.
 
 ## mdBook-based obi.menhera.org site
 

@@ -21,10 +21,9 @@ panes, tabs, or in-band escape commands. If you want window management, run
 
 ## Status
 
-The crate version is `v0.3.0`. It adds automatic negotiated keepalive: dead
-connections trigger reconnection, and stale broker attachments are released
-without requiring users to configure SSH options. The `0.1` wire-protocol
-baseline remains compatible.
+The crate version is `v0.3.1`. It adds server-local targeted detach, so a user
+can list sessions and detach a selected non-current session. The `0.1`
+wire-protocol baseline remains compatible.
 
 The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.
@@ -55,11 +54,17 @@ List sessions from inside the remote account:
 ssh-obi-server --list
 ```
 
+Detach the attached client from a listed session on that server:
+
+```sh
+ssh-obi-server --detach --session aaaaaaaa
+```
+
 Detach the currently attached client for a known session from your local
 machine:
 
 ```sh
-ssh-obi --detach --session abc123 user@example.com
+ssh-obi --detach --session aaaaaaaa user@example.com
 ```
 
 Detach an existing client and connect to that session yourself:
@@ -69,7 +74,7 @@ ssh-obi --detach-connect user@example.com
 ```
 
 With exactly one session it is selected automatically. With several sessions,
-the client shows a selector. Add `--session abc123` to choose explicitly.
+the client shows a selector. Add `--session aaaaaaaa` to choose explicitly.
 
 Print the installed crate version:
 
@@ -91,8 +96,8 @@ ssh-obi-server --detach
 - Some recently displayed output may appear twice after reconnect.
 - New sessions show the remote host MOTD before the shell prompt, unless
   `~/.hushlogin` suppresses it.
-- Keepalive works automatically with v0.3.0 peers; no SSH keepalive options are
-  required.
+- Keepalive works automatically with v0.3.0 or newer peers; no SSH keepalive
+  options are required.
 - Windows is a client-only platform. Remote servers are Unix-like systems.
 
 ## What To Read Next

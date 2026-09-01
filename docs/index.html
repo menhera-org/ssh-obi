@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-93db2160.js";
+            window.path_to_searchindex_js = "searchindex-dc3f6096.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -192,10 +192,9 @@ use.</li>
 panes, tabs, or in-band escape commands. If you want window management, run
 <code>tmux</code> or another multiplexer inside the remote shell.</p>
 <h2 id="status"><a class="header" href="#status">Status</a></h2>
-<p>The crate version is <code>v0.3.0</code>. It adds automatic negotiated keepalive: dead
-connections trigger reconnection, and stale broker attachments are released
-without requiring users to configure SSH options. The <code>0.1</code> wire-protocol
-baseline remains compatible.</p>
+<p>The crate version is <code>v0.3.1</code>. It adds server-local targeted detach, so a user
+can list sessions and detach a selected non-current session. The <code>0.1</code>
+wire-protocol baseline remains compatible.</p>
 <p>The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
 <h2 id="quick-examples"><a class="header" href="#quick-examples">Quick Examples</a></h2>
@@ -211,15 +210,18 @@ bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
 <p>List sessions from inside the remote account:</p>
 <pre><code class="language-sh">ssh-obi-server --list
 </code></pre>
+<p>Detach the attached client from a listed session on that server:</p>
+<pre><code class="language-sh">ssh-obi-server --detach --session aaaaaaaa
+</code></pre>
 <p>Detach the currently attached client for a known session from your local
 machine:</p>
-<pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
+<pre><code class="language-sh">ssh-obi --detach --session aaaaaaaa user@example.com
 </code></pre>
 <p>Detach an existing client and connect to that session yourself:</p>
 <pre><code class="language-sh">ssh-obi --detach-connect user@example.com
 </code></pre>
 <p>With exactly one session it is selected automatically. With several sessions,
-the client shows a selector. Add <code>--session abc123</code> to choose explicitly.</p>
+the client shows a selector. Add <code>--session aaaaaaaa</code> to choose explicitly.</p>
 <p>Print the installed crate version:</p>
 <pre><code class="language-sh">ssh-obi --obi-version
 </code></pre>
@@ -234,8 +236,8 @@ the client shows a selector. Add <code>--session abc123</code> to choose explici
 <li>Some recently displayed output may appear twice after reconnect.</li>
 <li>New sessions show the remote host MOTD before the shell prompt, unless
 <code>~/.hushlogin</code> suppresses it.</li>
-<li>Keepalive works automatically with v0.3.0 peers; no SSH keepalive options are
-required.</li>
+<li>Keepalive works automatically with v0.3.0 or newer peers; no SSH keepalive
+options are required.</li>
 <li>Windows is a client-only platform. Remote servers are Unix-like systems.</li>
 </ul>
 <h2 id="what-to-read-next"><a class="header" href="#what-to-read-next">What To Read Next</a></h2>

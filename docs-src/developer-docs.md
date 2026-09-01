@@ -57,7 +57,7 @@ Pages after each build:
 
 ## Release Builds
 
-The crate version is `v0.3.0`. The wire-protocol baseline remains `0.1`.
+The crate version is `v0.3.1`. The wire-protocol baseline remains `0.1`.
 Release tarballs for the bootstrap installers are served from
 `https://obi.menhera.org/`.
 
@@ -105,8 +105,9 @@ There are three remote process roles:
 
 - Daemon: long-lived process that owns one PTY and one shell.
 - Broker: short-lived process started by SSH to connect the client to a daemon.
-- Detach helper: short-lived process run inside the remote shell by
-  `ssh-obi-server --detach`.
+- Detach helper: short-lived control process run as `ssh-obi-server --detach`.
+  It targets the current shell through its environment or a same-user session
+  socket through `--session ID`.
 
 The local client starts the system `ssh` binary, sends the bootstrap as the
 remote command, waits for `OBI-SERVER-READY`, negotiates capabilities, selects

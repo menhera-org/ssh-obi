@@ -39,6 +39,27 @@ pub fn detach_from_env() -> Result<(), ServerError> {
     detach_via_socket(socket)
 }
 
+#[cfg(unix)]
+pub fn detach_local_session(session_id: &str) -> Result<(), ServerError> {
+    detach_local_session_in_dir(socket_dir_for_uid(current_uid()), session_id)
+}
+
+#[cfg(unix)]
+fn detach_local_session_in_dir(
+    socket_dir: impl AsRef<Path>,
+    session_id: &str,
+) -> Result<(), ServerError> {
+    let socket = socket_path(socket_dir, session_id)?;
+    detach_via_socket(socket)
+}
+
+#[cfg(not(unix))]
+pub fn detach_local_session(_session_id: &str) -> Result<(), ServerError> {
+    Err(ServerError::UnsupportedPlatform(
+        "server control sockets require Unix-domain sockets",
+    ))
+}
+
 pub fn run_broker_stdio() -> Result<(), ServerError> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -790,6 +811,37 @@ mod tests {
         detach_via_socket(&path).unwrap();
         thread.join().unwrap();
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn detach_local_session_targets_session_id_in_socket_dir() {
+        let socket_dir = test_socket_dir("detach-local-session");
+        fs::create_dir_all(&socket_dir).unwrap();
+        let path = socket_path(&socket_dir, "aaaaaaaa").unwrap();
+        let listener = match UnixListener::bind(&path) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping Unix socket test because bind is not permitted here");
+                let _ = fs::remove_dir_all(&socket_dir);
+                return;
+            }
+            Err(err) => panic!("failed to bind test Unix socket: {err}"),
+        };
+
+        let thread = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let writer_stream = stream.try_clone().unwrap();
+            let mut reader = FramedReader::new(stream);
+            answer_capability_exchange(&mut reader, writer_stream);
+
+            let frame = reader.read_frame().unwrap().unwrap();
+            assert_eq!(frame.msg_type(), MessageType::DETACH);
+            let _: DetachRequest = frame.decode_body().unwrap();
+        });
+
+        detach_local_session_in_dir(&socket_dir, "aaaaaaaa").unwrap();
+        thread.join().unwrap();
+        let _ = fs::remove_dir_all(&socket_dir);
     }
 
     #[test]

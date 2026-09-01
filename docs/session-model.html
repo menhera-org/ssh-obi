@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-93db2160.js";
+            window.path_to_searchindex_js = "searchindex-dc3f6096.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -206,7 +206,10 @@ session to detach its current client:</p>
 <p>On the server host itself, <code>ssh-obi-server --list</code> lists all alive sessions for
 the current Unix user. If it is run inside an <code>ssh-obi</code> session, that session is
 marked in the <code>CUR</code> column. If it is run outside an <code>ssh-obi</code> session, no
-session is marked current.</p>
+session is marked current. To detach the attached client from a listed session,
+including a non-current one, run:</p>
+<pre><code class="language-sh">ssh-obi-server --detach --session ID
+</code></pre>
 <p>During automatic reconnect, <code>ssh-obi</code> already knows the session it is trying to
 recover. If that session is still marked busy because the previous broker has
 not fully gone away, the reconnecting client asks the stale attached client to
@@ -225,6 +228,10 @@ client.</p>
 <pre><code class="language-sh">ssh-obi-server --detach
 </code></pre>
 <p>the local client exits cleanly and does not reconnect.</p>
+<p>From another shell on the same server account,
+<code>ssh-obi-server --detach --session ID</code> sends the same graceful detach request
+to the named session. The session ID can be obtained with
+<code>ssh-obi-server --list</code>.</p>
 <p>The shell is not sent SIGHUP.</p>
 <h2 id="output-while-detached"><a class="header" href="#output-while-detached">Output While Detached</a></h2>
 <p>Remote output continues to be collected while detached.</p>

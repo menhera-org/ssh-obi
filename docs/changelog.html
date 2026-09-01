@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-93db2160.js";
+            window.path_to_searchindex_js = "searchindex-dc3f6096.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -175,9 +175,22 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="changelog"><a class="header" href="#changelog">Changelog</a></h1>
-<h2 id="v030"><a class="header" href="#v030">v0.3.0</a></h2>
+<h2 id="v031"><a class="header" href="#v031">v0.3.1</a></h2>
 <p>The wire-protocol baseline remains <code>0.1</code>.</p>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
+<ul>
+<li><code>ssh-obi-server --detach --session ID</code> detaches the attached client from a
+selected session on the same server host. Use <code>ssh-obi-server --list</code> to find
+session IDs, including non-current sessions.</li>
+</ul>
+<h3 id="notes"><a class="header" href="#notes">Notes</a></h3>
+<ul>
+<li>Bare <code>ssh-obi-server --detach</code> retains its existing behavior and targets the
+session identified by the remote shell environment.</li>
+</ul>
+<h2 id="v030"><a class="header" href="#v030">v0.3.0</a></h2>
+<p>The wire-protocol baseline remains <code>0.1</code>.</p>
+<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
 <ul>
 <li>Negotiated <code>keepalive.v1</code> heartbeats work automatically for attached
 sessions; users do not need to configure unfamiliar SSH options.</li>
@@ -188,14 +201,14 @@ flow.</li>
 client ping arrives for 45 seconds, making the session available for
 reconnect.</li>
 </ul>
-<h3 id="notes"><a class="header" href="#notes">Notes</a></h3>
+<h3 id="notes-1"><a class="header" href="#notes-1">Notes</a></h3>
 <ul>
 <li>Older clients and brokers do not negotiate <code>keepalive.v1</code> and retain the
 previous connection behavior.</li>
 </ul>
 <h2 id="v021"><a class="header" href="#v021">v0.2.1</a></h2>
 <p>The wire-protocol baseline remains <code>0.1</code>.</p>
-<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
+<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
 <ul>
 <li><code>--detach-connect</code> selects and takes over an existing session. <code>--session ID</code>
 overrides automatic selection.</li>
@@ -220,7 +233,7 @@ their private per-user directory.</li>
 </ul>
 <h2 id="v013"><a class="header" href="#v013">v0.1.3</a></h2>
 <p>Released for the <code>0.1.x</code> protocol line.</p>
-<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
+<h3 id="added-3"><a class="header" href="#added-3">Added</a></h3>
 <ul>
 <li>New sessions print the remote host MOTD before the shell starts, using
 <code>/run/motd.dynamic</code>, <code>/etc/motd</code>, and readable non-empty files under
@@ -231,13 +244,13 @@ their private per-user directory.</li>
 <li>Automatic reconnect retries now use a small capped exponential backoff:
 125ms, 250ms, 500ms, 1s, then 2s, with a maximum of 10 attempts.</li>
 </ul>
-<h3 id="notes-1"><a class="header" href="#notes-1">Notes</a></h3>
+<h3 id="notes-2"><a class="header" href="#notes-2">Notes</a></h3>
 <ul>
 <li>The protocol baseline remains <code>0.1</code>.</li>
 </ul>
 <h2 id="v012"><a class="header" href="#v012">v0.1.2</a></h2>
 <p>Released for the <code>0.1.x</code> protocol line.</p>
-<h3 id="added-3"><a class="header" href="#added-3">Added</a></h3>
+<h3 id="added-4"><a class="header" href="#added-4">Added</a></h3>
 <ul>
 <li>On Linux systems booted with systemd and a user bus, newly spawned PTY
 children are moved into a transient user scope before exec. This follows the
@@ -259,7 +272,7 @@ when run inside an <code>ssh-obi</code> session.</li>
 compatible <code>ssh-obi-server</code> already exists at
 <code>~/.cargo/bin/ssh-obi-server</code> or on <code>PATH</code>.</li>
 </ul>
-<h3 id="notes-2"><a class="header" href="#notes-2">Notes</a></h3>
+<h3 id="notes-3"><a class="header" href="#notes-3">Notes</a></h3>
 <ul>
 <li>The protocol baseline remains <code>0.1</code>.</li>
 <li>Non-systemd Linux systems and non-Linux Unix systems do not require any
@@ -267,7 +280,7 @@ systemd tooling.</li>
 </ul>
 <h2 id="v011"><a class="header" href="#v011">v0.1.1</a></h2>
 <p>Released for the <code>0.1.x</code> protocol line.</p>
-<h3 id="added-4"><a class="header" href="#added-4">Added</a></h3>
+<h3 id="added-5"><a class="header" href="#added-5">Added</a></h3>
 <ul>
 <li>The client sends an initial terminal window size before attach and new-session
 requests when the remote server supports <code>initial-window-size.v1</code>.</li>
@@ -279,7 +292,7 @@ places before trying a tarball install:
 <code>~/.ssh-obi/bin/ssh-obi-server</code>, <code>~/.cargo/bin/ssh-obi-server</code>, and
 <code>ssh-obi-server</code> found on <code>PATH</code>.</li>
 </ul>
-<h3 id="notes-3"><a class="header" href="#notes-3">Notes</a></h3>
+<h3 id="notes-4"><a class="header" href="#notes-4">Notes</a></h3>
 <ul>
 <li>The protocol baseline remains <code>0.1</code>; <code>initial-window-size.v1</code> is negotiated as
 a capability.</li>
@@ -289,7 +302,7 @@ package.</li>
 </ul>
 <h2 id="v010"><a class="header" href="#v010">v0.1.0</a></h2>
 <p>Initial public release.</p>
-<h3 id="added-5"><a class="header" href="#added-5">Added</a></h3>
+<h3 id="added-6"><a class="header" href="#added-6">Added</a></h3>
 <ul>
 <li>Local <code>ssh-obi</code> client and Unix remote <code>ssh-obi-server</code>.</li>
 <li>Per-user long-lived remote sessions.</li>

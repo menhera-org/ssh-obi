@@ -45,7 +45,12 @@ ssh-obi --detach --session ID user@host
 On the server host itself, `ssh-obi-server --list` lists all alive sessions for
 the current Unix user. If it is run inside an `ssh-obi` session, that session is
 marked in the `CUR` column. If it is run outside an `ssh-obi` session, no
-session is marked current.
+session is marked current. To detach the attached client from a listed session,
+including a non-current one, run:
+
+```sh
+ssh-obi-server --detach --session ID
+```
 
 During automatic reconnect, `ssh-obi` already knows the session it is trying to
 recover. If that session is still marked busy because the previous broker has
@@ -76,6 +81,11 @@ ssh-obi-server --detach
 ```
 
 the local client exits cleanly and does not reconnect.
+
+From another shell on the same server account,
+`ssh-obi-server --detach --session ID` sends the same graceful detach request
+to the named session. The session ID can be obtained with
+`ssh-obi-server --list`.
 
 The shell is not sent SIGHUP.
 

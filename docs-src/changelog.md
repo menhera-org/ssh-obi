@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.1
+
+The wire-protocol baseline remains `0.1`.
+
+### Added
+
+- `ssh-obi-server --detach --session ID` detaches the attached client from a
+  selected session on the same server host. Use `ssh-obi-server --list` to find
+  session IDs, including non-current sessions.
+
+### Notes
+
+- Bare `ssh-obi-server --detach` retains its existing behavior and targets the
+  session identified by the remote shell environment.
+
 ## v0.3.0
 
 The wire-protocol baseline remains `0.1`.

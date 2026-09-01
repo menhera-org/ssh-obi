@@ -1,13 +1,20 @@
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use ssh_obi::daemon::run_daemon;
 use ssh_obi::protocol::{WindowSize, supports_protocol_baseline};
-use ssh_obi::server::{detach_from_env, list_local_sessions, run_broker_stdio};
+use ssh_obi::server::{
+    detach_from_env, detach_local_session, list_local_sessions, run_broker_stdio,
+};
 use ssh_obi::session::{SessionId, generate_session_id};
 
 #[derive(Debug, Parser)]
-#[command(author, version, about)]
+#[command(
+    author,
+    version,
+    about,
+    group(ArgGroup::new("session_action").args(["daemon", "detach"]))
+)]
 struct Args {
     #[arg(long = "obi-version", conflicts_with_all = ["daemon", "detach", "list", "protocol_check"])]
     obi_version: bool,
@@ -15,16 +22,30 @@ struct Args {
     #[arg(long, conflicts_with_all = ["detach", "list", "protocol_check"])]
     daemon: bool,
 
-    #[arg(long, conflicts_with_all = ["daemon", "list", "protocol_check"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["daemon", "list", "protocol_check"],
+        help = "Detach the current session, or the session selected by --session"
+    )]
     detach: bool,
 
-    #[arg(long, conflicts_with_all = ["daemon", "detach", "protocol_check"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["daemon", "detach", "protocol_check"],
+        help = "List alive sessions for the current user"
+    )]
     list: bool,
 
     #[arg(long = "protocol-check", value_name = "BASELINE", conflicts_with_all = ["daemon", "detach", "list"])]
     protocol_check: Option<String>,
 
-    #[arg(long, value_name = "ID", requires = "daemon")]
+    #[arg(
+        long,
+        value_name = "ID",
+        requires = "session_action",
+        conflicts_with_all = ["obi_version", "list", "protocol_check"],
+        help = "Session ID for --daemon or --detach"
+    )]
     session: Option<String>,
 
     #[arg(long, value_name = "ROWS", requires = "daemon")]
@@ -97,7 +118,11 @@ fn main() -> ExitCode {
     }
 
     if args.detach {
-        if let Err(err) = detach_from_env() {
+        let result = match args.session.as_deref() {
+            Some(session_id) => detach_local_session(session_id),
+            None => detach_from_env(),
+        };
+        if let Err(err) = result {
             eprintln!("ssh-obi-server: detach failed: {err}");
             return ExitCode::from(1);
         }
@@ -122,4 +147,38 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detach_accepts_session_target() {
+        let args =
+            Args::try_parse_from(["ssh-obi-server", "--detach", "--session", "aaaaaaaa"]).unwrap();
+
+        assert!(args.detach);
+        assert_eq!(args.session.as_deref(), Some("aaaaaaaa"));
+    }
+
+    #[test]
+    fn detach_without_session_remains_valid() {
+        let args = Args::try_parse_from(["ssh-obi-server", "--detach"]).unwrap();
+
+        assert!(args.detach);
+        assert!(args.session.is_none());
+    }
+
+    #[test]
+    fn session_requires_daemon_or_detach_action() {
+        assert!(Args::try_parse_from(["ssh-obi-server", "--session", "aaaaaaaa"]).is_err());
+    }
+
+    #[test]
+    fn list_rejects_session_target() {
+        assert!(
+            Args::try_parse_from(["ssh-obi-server", "--list", "--session", "aaaaaaaa",]).is_err()
+        );
+    }
 }
