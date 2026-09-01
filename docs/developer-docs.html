@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f8b4801a.js";
+            window.path_to_searchindex_js = "searchindex-93db2160.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -209,7 +209,7 @@ Pages after each build:</p>
 <li>release tarballs found in known release output locations</li>
 </ul>
 <h2 id="release-builds"><a class="header" href="#release-builds">Release Builds</a></h2>
-<p>The crate version is <code>v0.2.1</code>. The wire-protocol baseline remains <code>0.1</code>.
+<p>The crate version is <code>v0.3.0</code>. The wire-protocol baseline remains <code>0.1</code>.
 Release tarballs for the bootstrap installers are served from
 <code>https://obi.menhera.org/</code>.</p>
 <p>Use:</p>
@@ -276,11 +276,18 @@ are frozen once released; breaking changes require new capability names.</p>
 <li><code>session-list.v1</code></li>
 <li><code>exit-code.v1</code></li>
 <li><code>initial-window-size.v1</code></li>
+<li><code>keepalive.v1</code></li>
 </ul>
 <p><code>initial-window-size.v1</code> lets the client send terminal dimensions before an
 attach or new-session request. The broker applies the size before replay on
 reattach, and new daemons create their PTY with that size when possible. The
 protocol baseline remains <code>0.1</code>.</p>
+<p><code>keepalive.v1</code> adds <code>Ping</code> and <code>Pong</code> frames carrying an echoed nonce. The
+client sends a ping every 15 seconds and treats a missing pong after 45 seconds
+as an ambiguous disconnect. The broker answers pings itself and independently
+closes its daemon connection if negotiated client pings stop for 45 seconds.
+This keeps heartbeat behavior independent of the version of a persistent
+session daemon.</p>
 <p>MOTD output is local to daemon startup and does not require a wire capability.
 The daemon collects readable non-empty <code>/run/motd.dynamic</code>, <code>/etc/motd</code>, and
 sorted <code>/etc/motd.d/*</code> files unless <code>~/.hushlogin</code> exists, then writes those

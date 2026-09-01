@@ -57,7 +57,7 @@ Pages after each build:
 
 ## Release Builds
 
-The crate version is `v0.2.1`. The wire-protocol baseline remains `0.1`.
+The crate version is `v0.3.0`. The wire-protocol baseline remains `0.1`.
 Release tarballs for the bootstrap installers are served from
 `https://obi.menhera.org/`.
 
@@ -140,11 +140,19 @@ Current capability names include:
 - `session-list.v1`
 - `exit-code.v1`
 - `initial-window-size.v1`
+- `keepalive.v1`
 
 `initial-window-size.v1` lets the client send terminal dimensions before an
 attach or new-session request. The broker applies the size before replay on
 reattach, and new daemons create their PTY with that size when possible. The
 protocol baseline remains `0.1`.
+
+`keepalive.v1` adds `Ping` and `Pong` frames carrying an echoed nonce. The
+client sends a ping every 15 seconds and treats a missing pong after 45 seconds
+as an ambiguous disconnect. The broker answers pings itself and independently
+closes its daemon connection if negotiated client pings stop for 45 seconds.
+This keeps heartbeat behavior independent of the version of a persistent
+session daemon.
 
 MOTD output is local to daemon startup and does not require a wire capability.
 The daemon collects readable non-empty `/run/motd.dynamic`, `/etc/motd`, and

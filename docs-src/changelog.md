@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.3.0
+
+The wire-protocol baseline remains `0.1`.
+
+### Added
+
+- Negotiated `keepalive.v1` heartbeats work automatically for attached
+  sessions; users do not need to configure unfamiliar SSH options.
+- The client sends a ping every 15 seconds and requires the matching pong
+  within 45 seconds. An unresponsive connection enters the existing reconnect
+  flow.
+- A broker that negotiated keepalive releases its daemon attachment when no
+  client ping arrives for 45 seconds, making the session available for
+  reconnect.
+
+### Notes
+
+- Older clients and brokers do not negotiate `keepalive.v1` and retain the
+  previous connection behavior.
+
 ## v0.2.1
 
 The wire-protocol baseline remains `0.1`.

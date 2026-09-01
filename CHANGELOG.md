@@ -2,12 +2,21 @@
 
 ## 0.3.0
 
+The wire-protocol baseline remains `0.1`.
+
 ### Added
 
 - Negotiated `keepalive.v1` heartbeats now work automatically for attached
   sessions. The client detects an unresponsive broker and reconnects, while the
   broker detaches clients that stop sending heartbeats so stale sessions become
   available without user-supplied SSH options.
+
+### Notes
+
+- Keepalive is enabled only when both client and broker negotiate
+  `keepalive.v1`; connections to older peers retain their previous behavior.
+- The client sends a ping every 15 seconds. A missing pong or missing incoming
+  ping is considered dead after 45 seconds.
 
 ## 0.2.1
 

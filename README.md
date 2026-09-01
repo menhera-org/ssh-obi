@@ -4,7 +4,7 @@
 
 The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
 
-**Status:** the crate version is `v0.2.1`. The `0.1` wire-protocol baseline remains compatible; features continue to be negotiated through `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1`/`initial-window-size.v1`/`keepalive.v1` capabilities.
+**Status:** the crate version is `v0.3.0`. It adds automatic negotiated keepalive while retaining compatibility with the `0.1` wire-protocol baseline. Features continue to be negotiated through `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1`/`initial-window-size.v1`/`keepalive.v1` capabilities.
 
 ## What it is
 
@@ -141,7 +141,7 @@ Stable across all major versions. Forward-compatible by design:
 
 - **Fixed framing.** `msg_type: u8`, `flags: u8`, `length: u32 (BE)`, then `length` bytes of CBOR-encoded payload. Receivers must skip unknown `msg_type` silently.
 - **Conservative frame limits.** Maximum payload length is 1 MiB. Oversized lengths, malformed CBOR, invalid required fields, or other protocol violations close the connection with an error. Unknown message types at or below the size limit are skipped silently.
-- **Capability handshake, not version negotiation.** Each side sends a list of capability strings (`pty.v1`, `replay.v1`, `detach.v1`, `session-list.v1`, `exit-code.v1`, `initial-window-size.v1`). The intersection is the working set. New features ship as new capabilities; existing capabilities are frozen on first release. There is no "v2 of `pty.v1`" — that would be `pty.v2`, a separate capability.
+- **Capability handshake, not version negotiation.** Each side sends a list of capability strings (`pty.v1`, `replay.v1`, `detach.v1`, `session-list.v1`, `exit-code.v1`, `initial-window-size.v1`, `keepalive.v1`). The intersection is the working set. New features ship as new capabilities; existing capabilities are frozen on first release. There is no "v2 of `pty.v1`" — that would be `pty.v2`, a separate capability.
 - **Message bodies are CBOR** with stable field tags. Adding a field requires a new capability, never an in-place edit to an existing one.
 - **`ssh-obi-server --protocol-check <baseline>`** is the binary-compatibility probe used by the bootstrap. Returns 0 if the server can speak the framing/handshake of any protocol the given baseline supports. This is the only place a version *number* appears on the wire — and it's about binary compatibility, not feature compatibility.
 
@@ -271,9 +271,9 @@ These are settled — please don't relitigate without discussion:
 
 ## Changelog
 
-See [`CHANGELOG.md`](./CHANGELOG.md). `v0.2.1` adds durable interactive
-reconnection, session takeover with `--detach-connect`, version-aware remote
-bootstrap, and correct login-shell umask inheritance.
+See [`CHANGELOG.md`](./CHANGELOG.md). `v0.3.0` adds automatic negotiated
+keepalive so dead connections are detected, stale broker attachments are
+released, and reconnect begins without user-supplied SSH options.
 
 ## mdBook-based obi.menhera.org site
 

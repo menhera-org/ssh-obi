@@ -21,9 +21,10 @@ panes, tabs, or in-band escape commands. If you want window management, run
 
 ## Status
 
-The crate version is `v0.2.1`. It adds durable interactive reconnection,
-session takeover, version-aware remote bootstrap, and correct login-shell umask
-inheritance. The `0.1` wire-protocol baseline remains compatible.
+The crate version is `v0.3.0`. It adds automatic negotiated keepalive: dead
+connections trigger reconnection, and stale broker attachments are released
+without requiring users to configure SSH options. The `0.1` wire-protocol
+baseline remains compatible.
 
 The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.
@@ -90,6 +91,8 @@ ssh-obi-server --detach
 - Some recently displayed output may appear twice after reconnect.
 - New sessions show the remote host MOTD before the shell prompt, unless
   `~/.hushlogin` suppresses it.
+- Keepalive works automatically with v0.3.0 peers; no SSH keepalive options are
+  required.
 - Windows is a client-only platform. Remote servers are Unix-like systems.
 
 ## What To Read Next

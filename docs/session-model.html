@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f8b4801a.js";
+            window.path_to_searchindex_js = "searchindex-93db2160.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -243,6 +243,11 @@ failures, using delays of 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most 120s.
 Deadlines count suspend-aware monotonic machine time rather than wall time.
 Normal terminal mode is restored during recovery so OpenSSH can interactively
 request credentials or confirmation.</p>
+<p>With v0.3.0 peers, <code>keepalive.v1</code> is negotiated automatically. The client sends
+a heartbeat every 15 seconds and reconnects if the broker does not answer
+within 45 seconds. The broker also releases the session if client heartbeats
+stop for 45 seconds. No SSH keepalive options are required. Older peers do not
+negotiate this behavior.</p>
 <p>The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.
 That is acceptable and expected.</p>

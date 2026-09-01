@@ -103,6 +103,12 @@ Deadlines count suspend-aware monotonic machine time rather than wall time.
 Normal terminal mode is restored during recovery so OpenSSH can interactively
 request credentials or confirmation.
 
+With v0.3.0 peers, `keepalive.v1` is negotiated automatically. The client sends
+a heartbeat every 15 seconds and reconnects if the broker does not answer
+within 45 seconds. The broker also releases the session if client heartbeats
+stop for 45 seconds. No SSH keepalive options are required. Older peers do not
+negotiate this behavior.
+
 The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.
 That is acceptable and expected.
