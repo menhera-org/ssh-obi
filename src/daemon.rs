@@ -128,6 +128,8 @@ mod runtime {
             return Err(DaemonError::SocketAlreadyExists(socket_path));
         }
 
+        // Bind before daemonizing. The socket is created with the launcher's umask and is
+        // protected by the explicitly validated 0700 parent directory.
         let listener = UnixListener::bind(&socket_path).map_err(DaemonError::Bind)?;
         listener
             .set_nonblocking(true)
@@ -189,7 +191,6 @@ mod runtime {
     }
 
     fn daemonize_after_bind() -> Result<(), DaemonError> {
-        use nix::sys::stat::{Mode, umask};
         use nix::unistd::{ForkResult, chdir, dup2_stderr, dup2_stdin, dup2_stdout, fork, setsid};
 
         match unsafe { fork() }.map_err(DaemonError::Fork)? {
@@ -205,8 +206,8 @@ mod runtime {
         }
 
         chdir("/").map_err(DaemonError::Chdir)?;
-        umask(Mode::empty());
 
+        // Preserve the launcher's umask: the login shell spawned below must inherit it.
         let dev_null = fs::OpenOptions::new()
             .read(true)
             .write(true)
