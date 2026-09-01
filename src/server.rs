@@ -12,11 +12,11 @@ use std::time::Instant;
 #[cfg(unix)]
 use crate::protocol::{
     AttachSessionRequest, AttachedSession, BrokerAttachRequest, CAP_INITIAL_WINDOW_SIZE_V1,
-    DaemonInfoRequest, DetachRequest, NewSessionRequest,
+    CAP_KEEPALIVE_V1, DaemonInfoRequest, DetachRequest, NewSessionRequest,
 };
 use crate::protocol::{
-    Capabilities, DaemonInfo, DetachSessionRequest, ErrorMessage, MessageType, ProtocolError,
-    SessionList, SessionListRequest, WindowSize,
+    Capabilities, DaemonInfo, DetachSessionRequest, ErrorMessage, Keepalive, MessageType,
+    ProtocolError, SessionList, SessionListRequest, WindowSize,
 };
 use crate::session::{SessionIdError, SocketPathError, socket_dir_for_uid, socket_path_for_uid};
 #[cfg(unix)]
@@ -31,6 +31,8 @@ pub const ENV_SESSION: &str = "SSH_OBI_SESSION";
 pub const ENV_SOCKET: &str = "SSH_OBI_SOCKET";
 #[cfg(unix)]
 const DAEMON_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(unix)]
+const BROKER_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub fn detach_from_env() -> Result<(), ServerError> {
     let socket = env::var(ENV_SOCKET).map_err(|_| ServerError::MissingEnvironment(ENV_SOCKET))?;
@@ -51,11 +53,13 @@ pub fn list_local_sessions() -> Result<String, ServerError> {
 pub fn handle_broker_request<R, W>(reader: R, writer: W, uid: u32) -> Result<(), ServerError>
 where
     R: Read + Send + 'static,
-    W: Write + Send,
+    W: Write + Send + 'static,
 {
     let mut reader = FramedReader::new(reader);
     let mut writer = FramedWriter::new(writer);
     let mut saw_request = false;
+    #[cfg(unix)]
+    let mut keepalive_enabled = false;
     #[cfg(unix)]
     let mut pending_initial_window_size: Option<WindowSize> = None;
 
@@ -70,7 +74,14 @@ where
         saw_request = true;
 
         if frame.msg_type() == MessageType::CAPABILITIES {
-            let _: Capabilities = frame.decode_body()?;
+            let peer: Capabilities = frame.decode_body()?;
+            #[cfg(unix)]
+            {
+                keepalive_enabled = peer
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == CAP_KEEPALIVE_V1);
+            }
             writer.write_body(
                 MessageType::CAPABILITIES,
                 0,
@@ -136,7 +147,12 @@ where
                     &AttachedSession { session_id },
                 )?;
                 writer.flush()?;
-                return proxy_attached_session(reader, writer.into_inner(), daemon);
+                return proxy_attached_session(
+                    reader,
+                    writer.into_inner(),
+                    daemon,
+                    keepalive_enabled,
+                );
             }
         }
 
@@ -163,7 +179,12 @@ where
                     },
                 )?;
                 writer.flush()?;
-                return proxy_attached_session(reader, writer.into_inner(), daemon);
+                return proxy_attached_session(
+                    reader,
+                    writer.into_inner(),
+                    daemon,
+                    keepalive_enabled,
+                );
             }
         }
 
@@ -363,18 +384,42 @@ fn proxy_attached_session<R, W>(
     mut client_reader: FramedReader<R>,
     client_writer: W,
     daemon: std::os::unix::net::UnixStream,
+    keepalive_enabled: bool,
 ) -> Result<(), ServerError>
 where
     R: Read + Send + 'static,
-    W: Write + Send,
+    W: Write + Send + 'static,
 {
     use std::net::Shutdown;
 
     let daemon_reader = daemon.try_clone().map_err(ServerError::Connect)?;
     let daemon_writer = daemon.try_clone().map_err(ServerError::Connect)?;
+    let (keepalive_sender, _keepalive_guard) = if keepalive_enabled {
+        let (sender, guard) = start_keepalive_monitor(&daemon, BROKER_KEEPALIVE_TIMEOUT)?;
+        (Some(sender), Some(guard))
+    } else {
+        (None, None)
+    };
+    let client_writer = std::sync::Arc::new(std::sync::Mutex::new(client_writer));
+    let ping_writer = client_writer.clone();
     let _client_to_daemon = std::thread::spawn(move || -> Result<(), ServerError> {
         let mut daemon_writer = FramedWriter::new(daemon_writer);
         while let Some(frame) = client_reader.read_frame()? {
+            if frame.msg_type() == MessageType::PING {
+                if !keepalive_enabled {
+                    return Err(ServerError::UnexpectedMessage(frame.msg_type().get()));
+                }
+                let ping: Keepalive = frame.decode_body()?;
+                if let Some(sender) = &keepalive_sender {
+                    let _ = sender.send(KeepaliveMonitorEvent::Ping);
+                }
+                let mut stream = ping_writer.lock().expect("client writer poisoned");
+                let mut writer = FramedWriter::new(&mut *stream);
+                writer.write_body(MessageType::PONG, 0, &ping)?;
+                writer.flush()?;
+                continue;
+            }
+
             let should_close = frame.msg_type() == MessageType::DETACH;
             daemon_writer.write_frame(&frame)?;
             daemon_writer.flush()?;
@@ -390,7 +435,6 @@ where
     });
 
     let mut daemon_reader = FramedReader::new(daemon_reader);
-    let mut client_writer = FramedWriter::new(client_writer);
 
     while let Some(frame) = daemon_reader.read_frame()? {
         let should_close = matches!(
@@ -400,8 +444,10 @@ where
                 || msg == MessageType::SESSION_BUSY
                 || msg == MessageType::ERROR
         );
-        client_writer.write_frame(&frame)?;
-        client_writer.flush()?;
+        let mut stream = client_writer.lock().expect("client writer poisoned");
+        let mut writer = FramedWriter::new(&mut *stream);
+        writer.write_frame(&frame)?;
+        writer.flush()?;
 
         if should_close {
             let _ = daemon.shutdown(Shutdown::Both);
@@ -411,6 +457,71 @@ where
 
     let _ = daemon.shutdown(Shutdown::Both);
     Ok(())
+}
+
+#[cfg(unix)]
+enum KeepaliveMonitorEvent {
+    Ping,
+    Stop,
+}
+
+#[cfg(unix)]
+fn start_keepalive_monitor(
+    daemon: &std::os::unix::net::UnixStream,
+    timeout: Duration,
+) -> Result<
+    (
+        std::sync::mpsc::Sender<KeepaliveMonitorEvent>,
+        KeepaliveMonitorGuard,
+    ),
+    ServerError,
+> {
+    use std::net::Shutdown;
+
+    let monitor_daemon = daemon.try_clone().map_err(ServerError::Connect)?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    spawn_keepalive_monitor(receiver, timeout, move || {
+        let _ = monitor_daemon.shutdown(Shutdown::Both);
+    });
+    let guard = KeepaliveMonitorGuard {
+        sender: sender.clone(),
+    };
+    Ok((sender, guard))
+}
+
+#[cfg(unix)]
+fn spawn_keepalive_monitor<F>(
+    receiver: std::sync::mpsc::Receiver<KeepaliveMonitorEvent>,
+    timeout: Duration,
+    on_timeout: F,
+) where
+    F: FnOnce() + Send + 'static,
+{
+    std::thread::spawn(move || {
+        loop {
+            match receiver.recv_timeout(timeout) {
+                Ok(KeepaliveMonitorEvent::Ping) => {}
+                Ok(KeepaliveMonitorEvent::Stop)
+                | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    on_timeout();
+                    return;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(unix)]
+struct KeepaliveMonitorGuard {
+    sender: std::sync::mpsc::Sender<KeepaliveMonitorEvent>,
+}
+
+#[cfg(unix)]
+impl Drop for KeepaliveMonitorGuard {
+    fn drop(&mut self) {
+        let _ = self.sender.send(KeepaliveMonitorEvent::Stop);
+    }
 }
 
 #[cfg(unix)]
@@ -640,6 +751,25 @@ mod tests {
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[derive(Clone, Default)]
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl SharedWriter {
+        fn bytes(&self) -> Vec<u8> {
+            self.0.lock().expect("shared writer poisoned").clone()
+        }
+    }
+
+    impl Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("shared writer poisoned").write(bytes)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn detach_via_socket_sends_detach_request() {
         let Some((listener, path)) = test_listener("detach") else {
@@ -771,8 +901,9 @@ mod tests {
                 .unwrap();
         }
 
-        let mut response = Vec::new();
-        handle_broker_request(Cursor::new(request), &mut response, 4_294_967_295).unwrap();
+        let response = SharedWriter::default();
+        handle_broker_request(Cursor::new(request), response.clone(), 4_294_967_295).unwrap();
+        let response = response.bytes();
 
         let mut reader = FramedReader::new(response.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
@@ -801,8 +932,9 @@ mod tests {
                 .unwrap();
         }
 
-        let mut response = Vec::new();
-        handle_broker_request(Cursor::new(request), &mut response, 4_294_967_295).unwrap();
+        let response = SharedWriter::default();
+        handle_broker_request(Cursor::new(request), response.clone(), 4_294_967_295).unwrap();
+        let response = response.bytes();
 
         let mut reader = FramedReader::new(response.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
@@ -832,8 +964,9 @@ mod tests {
                 .unwrap();
         }
 
-        let mut response = Vec::new();
-        handle_broker_request(Cursor::new(request), &mut response, 4_294_967_295).unwrap();
+        let response = SharedWriter::default();
+        handle_broker_request(Cursor::new(request), response.clone(), 4_294_967_295).unwrap();
+        let response = response.bytes();
 
         let mut reader = FramedReader::new(response.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
@@ -854,9 +987,9 @@ mod tests {
                 .unwrap();
         }
 
-        let mut response = Vec::new();
-        let err =
-            handle_broker_request(Cursor::new(request), &mut response, 4_294_967_295).unwrap_err();
+        let response = SharedWriter::default();
+        let err = handle_broker_request(Cursor::new(request), response.clone(), 4_294_967_295)
+            .unwrap_err();
         assert!(matches!(
             err,
             ServerError::UidMismatch {
@@ -864,7 +997,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(response.is_empty());
+        assert!(response.bytes().is_empty());
     }
 
     #[test]
@@ -930,8 +1063,9 @@ mod tests {
                 .unwrap();
         }
 
-        let mut response = Vec::new();
-        handle_broker_request(Cursor::new(request), &mut response, uid).unwrap();
+        let response = SharedWriter::default();
+        handle_broker_request(Cursor::new(request), response.clone(), uid).unwrap();
+        let response = response.bytes();
 
         let mut reader = FramedReader::new(response.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
@@ -952,6 +1086,88 @@ mod tests {
 
         daemon.join().unwrap();
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn broker_answers_negotiated_keepalive_ping() {
+        let uid = current_uid();
+        let socket_dir = socket_dir_for_uid(uid);
+        prepare_socket_dir(&socket_dir, uid).unwrap();
+        let path = socket_path(&socket_dir, "kaaaaaaa").unwrap();
+        let _ = fs::remove_file(&path);
+        let listener = match UnixListener::bind(&path) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping Unix socket test because bind is not permitted here");
+                return;
+            }
+            Err(err) => panic!("failed to bind test Unix socket: {err}"),
+        };
+
+        let daemon = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = FramedReader::new(stream.try_clone().unwrap());
+            answer_capability_exchange(&mut reader, stream.try_clone().unwrap());
+            let frame = reader.read_frame().unwrap().unwrap();
+            assert_eq!(frame.msg_type(), MessageType::BROKER_ATTACH);
+            assert!(reader.read_frame().unwrap().is_none());
+        });
+
+        let mut request = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut request);
+            writer
+                .write_body(
+                    MessageType::CAPABILITIES,
+                    0,
+                    &Capabilities::default_supported(),
+                )
+                .unwrap();
+            writer
+                .write_body(
+                    MessageType::ATTACH_SESSION,
+                    0,
+                    &AttachSessionRequest {
+                        session_id: "kaaaaaaa".to_string(),
+                    },
+                )
+                .unwrap();
+            writer
+                .write_body(MessageType::PING, 0, &Keepalive { nonce: 42 })
+                .unwrap();
+        }
+
+        let response = SharedWriter::default();
+        handle_broker_request(Cursor::new(request), response.clone(), uid).unwrap();
+        let response = response.bytes();
+        let mut reader = FramedReader::new(response.as_slice());
+        assert_eq!(
+            reader.read_frame().unwrap().unwrap().msg_type(),
+            MessageType::CAPABILITIES
+        );
+        assert_eq!(
+            reader.read_frame().unwrap().unwrap().msg_type(),
+            MessageType::ATTACHED_SESSION
+        );
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::PONG);
+        assert_eq!(frame.decode_body::<Keepalive>().unwrap().nonce, 42);
+
+        daemon.join().unwrap();
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn keepalive_monitor_fires_after_timeout() {
+        let (_event_sender, event_receiver) = std::sync::mpsc::channel();
+        let (timeout_sender, timeout_receiver) = std::sync::mpsc::channel();
+        spawn_keepalive_monitor(event_receiver, Duration::from_millis(20), move || {
+            let _ = timeout_sender.send(());
+        });
+
+        timeout_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("monitor should close the daemon connection");
     }
 
     #[test]
@@ -1023,8 +1239,9 @@ mod tests {
                 .unwrap();
         }
 
-        let mut response = Vec::new();
-        handle_broker_request(Cursor::new(request), &mut response, uid).unwrap();
+        let response = SharedWriter::default();
+        handle_broker_request(Cursor::new(request), response.clone(), uid).unwrap();
+        let response = response.bytes();
 
         let mut reader = FramedReader::new(response.as_slice());
         let frame = reader.read_frame().unwrap().unwrap();
@@ -1096,9 +1313,9 @@ mod tests {
         }
 
         let broker = thread::spawn(move || {
-            let mut response = Vec::new();
-            handle_broker_request(client_read, &mut response, uid).unwrap();
-            response
+            let response = SharedWriter::default();
+            handle_broker_request(client_read, response.clone(), uid).unwrap();
+            response.bytes()
         });
 
         daemon.join().unwrap();

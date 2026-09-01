@@ -12,9 +12,10 @@ use crate::bootstrap::{
 };
 use crate::cli::{ClientAction, ClientArgs};
 use crate::protocol::{
-    AttachSessionRequest, AttachedSession, CAP_INITIAL_WINDOW_SIZE_V1, Capabilities,
-    DetachSessionRequest, ErrorMessage, ExitStatus, Frame, MessageType, NewSessionRequest,
-    ProtocolError, PtyData, SessionBusy, SessionList, SessionListRequest, WindowSize,
+    AttachSessionRequest, AttachedSession, CAP_INITIAL_WINDOW_SIZE_V1, CAP_KEEPALIVE_V1,
+    Capabilities, DetachSessionRequest, ErrorMessage, ExitStatus, Frame, Keepalive, MessageType,
+    NewSessionRequest, ProtocolError, PtyData, SessionBusy, SessionList, SessionListRequest,
+    WindowSize,
 };
 use crate::session::{
     AutoSelection, ExistingSelection, SessionIdError, SessionInfo, auto_select,
@@ -27,6 +28,14 @@ const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(120);
 const RECONNECT_SLEEP_QUANTUM: Duration = Duration::from_secs(1);
 const STDIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+#[cfg(not(test))]
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(not(test))]
+const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(45);
+#[cfg(test)]
+const KEEPALIVE_TIMEOUT: Duration = Duration::from_millis(30);
 
 #[cfg(unix)]
 type ClientRawModeGuard = RawModeGuard<std::io::Stdin>;
@@ -425,7 +434,19 @@ fn run_client_attempt(
         initial_session_id,
         attached_io,
         attempt_id,
+        capabilities
+            .iter()
+            .any(|capability| capability == CAP_KEEPALIVE_V1),
     );
+    if matches!(
+        &attached_result,
+        Err(AttachedSessionFailure {
+            error: ClientRunError::KeepaliveTimeout,
+            ..
+        })
+    ) {
+        let _ = child.kill();
+    }
     let status = child.wait().map_err(ClientRunError::WaitSsh)?;
     Ok(ClientAttemptResult::Attached(attached_result.map(
         |mut success| {
@@ -1045,6 +1066,7 @@ fn run_attached_session<R, W>(
     initial_session_id: Option<String>,
     attached_io: &AttachedIo,
     attempt_id: u64,
+    keepalive_enabled: bool,
 ) -> Result<AttachedSessionSuccess, AttachedSessionFailure>
 where
     R: Read + Send + 'static,
@@ -1057,11 +1079,43 @@ where
     let mut stdout = io::stdout().lock();
     let mut last_window_size = None;
     let mut stdin_open = true;
+    let mut next_keepalive = Instant::now() + KEEPALIVE_INTERVAL;
+    let mut pending_keepalive = None;
+    let mut keepalive_nonce = 0u64;
 
     send_window_size_if_changed(&mut writer, &mut last_window_size)
         .map_err(|err| AttachedSessionFailure::new(confirmed_session_id.clone(), err))?;
 
     loop {
+        let now = Instant::now();
+        if pending_keepalive.is_some_and(|(_, deadline)| now >= deadline) {
+            return Err(AttachedSessionFailure::new(
+                confirmed_session_id,
+                ClientRunError::KeepaliveTimeout,
+            ));
+        }
+        if keepalive_enabled && pending_keepalive.is_none() && now >= next_keepalive {
+            keepalive_nonce = keepalive_nonce.wrapping_add(1);
+            writer
+                .write_body(
+                    MessageType::PING,
+                    0,
+                    &Keepalive {
+                        nonce: keepalive_nonce,
+                    },
+                )
+                .map_err(|err| {
+                    AttachedSessionFailure::new(
+                        confirmed_session_id.clone(),
+                        ClientRunError::from(err),
+                    )
+                })?;
+            writer.flush().map_err(|err| {
+                AttachedSessionFailure::new(confirmed_session_id.clone(), ClientRunError::from(err))
+            })?;
+            pending_keepalive = Some((keepalive_nonce, now + KEEPALIVE_TIMEOUT));
+        }
+
         if resize_pending() {
             send_window_size_if_changed(&mut writer, &mut last_window_size)
                 .map_err(|err| AttachedSessionFailure::new(confirmed_session_id.clone(), err))?;
@@ -1163,6 +1217,20 @@ where
                             ClientRunError::CopyStdout(err),
                         )
                     })?;
+                    continue;
+                }
+
+                if frame.msg_type() == MessageType::PONG {
+                    let pong: Keepalive = frame.decode_body().map_err(|err| {
+                        AttachedSessionFailure::new(
+                            confirmed_session_id.clone(),
+                            ClientRunError::from(err),
+                        )
+                    })?;
+                    if pending_keepalive.is_some_and(|(nonce, _)| nonce == pong.nonce) {
+                        pending_keepalive = None;
+                        next_keepalive = Instant::now() + KEEPALIVE_INTERVAL;
+                    }
                     continue;
                 }
 
@@ -1481,6 +1549,7 @@ fn is_ambiguous_disconnect(error: &ClientRunError) -> bool {
     matches!(
         error,
         ClientRunError::UnexpectedBrokerEof
+            | ClientRunError::KeepaliveTimeout
             | ClientRunError::Protocol(ProtocolError::Io(_))
             | ClientRunError::Protocol(ProtocolError::TruncatedHeader)
             | ClientRunError::Protocol(ProtocolError::TruncatedPayload { .. })
@@ -1583,6 +1652,7 @@ pub enum ClientRunError {
     InstallDeclined,
     RemoteBootstrap(String),
     UnexpectedBrokerEof,
+    KeepaliveTimeout,
     UnexpectedBrokerMessage(u8),
     BrokerError(String),
     SessionBusy(String),
@@ -1625,6 +1695,7 @@ impl fmt::Display for ClientRunError {
             Self::InstallDeclined => write!(f, "install declined"),
             Self::RemoteBootstrap(message) => write!(f, "remote bootstrap failed: {message}"),
             Self::UnexpectedBrokerEof => write!(f, "broker ended before sending a response"),
+            Self::KeepaliveTimeout => write!(f, "broker keepalive timed out"),
             Self::UnexpectedBrokerMessage(msg_type) => {
                 write!(f, "broker returned unexpected message type {msg_type}")
             }
@@ -1730,6 +1801,40 @@ mod tests {
             sender,
             stdin_control: Arc::new(StdinControl::default()),
             _stdin_thread: thread::spawn(|| {}),
+        }
+    }
+
+    struct BlockingReader {
+        prefix: Cursor<Vec<u8>>,
+        release: Receiver<()>,
+    }
+
+    impl Read for BlockingReader {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            if self.prefix.position() < self.prefix.get_ref().len() as u64 {
+                return self.prefix.read(bytes);
+            }
+            let _ = self.release.recv();
+            Ok(0)
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedWriter {
+        fn bytes(&self) -> Vec<u8> {
+            self.0.lock().expect("shared writer poisoned").clone()
+        }
+    }
+
+    impl Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("shared writer poisoned").write(bytes)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 
@@ -2219,6 +2324,7 @@ mod tests {
             Some("aaaaaaaa".to_string()),
             &attached_io,
             1,
+            false,
         )
         .unwrap_err();
 
@@ -2243,9 +2349,15 @@ mod tests {
         }
 
         let attached_io = attached_io_for_test();
-        let result =
-            run_attached_session(Cursor::new(input), Vec::<u8>::new(), None, &attached_io, 1)
-                .unwrap_err();
+        let result = run_attached_session(
+            Cursor::new(input),
+            Vec::<u8>::new(),
+            None,
+            &attached_io,
+            1,
+            false,
+        )
+        .unwrap_err();
 
         assert_eq!(result.confirmed_session_id.as_deref(), Some("bbbbbbbb"));
         assert!(matches!(result.error, ClientRunError::UnexpectedBrokerEof));
@@ -2268,14 +2380,60 @@ mod tests {
         }
 
         let attached_io = attached_io_for_test();
-        let result =
-            run_attached_session(Cursor::new(input), Vec::<u8>::new(), None, &attached_io, 1)
-                .unwrap_err();
+        let result = run_attached_session(
+            Cursor::new(input),
+            Vec::<u8>::new(),
+            None,
+            &attached_io,
+            1,
+            false,
+        )
+        .unwrap_err();
 
         assert!(result.confirmed_session_id.is_none());
         assert!(matches!(
             result.error,
             ClientRunError::SessionBusy(session_id) if session_id == "aaaaaaaa"
         ));
+    }
+
+    #[test]
+    fn attached_session_sends_negotiated_keepalive_and_times_out_without_pong() {
+        let mut input = Vec::new();
+        let mut input_writer = FramedWriter::new(&mut input);
+        input_writer
+            .write_body(
+                MessageType::ATTACHED_SESSION,
+                0,
+                &AttachedSession {
+                    session_id: "kaaaaaaa".to_string(),
+                },
+            )
+            .unwrap();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let reader = BlockingReader {
+            prefix: Cursor::new(input),
+            release: release_receiver,
+        };
+        let output = SharedWriter::default();
+
+        let attached_io = attached_io_for_test();
+        let result =
+            run_attached_session(reader, output.clone(), None, &attached_io, 1, true).unwrap_err();
+
+        assert_eq!(result.confirmed_session_id.as_deref(), Some("kaaaaaaa"));
+        assert!(matches!(result.error, ClientRunError::KeepaliveTimeout));
+
+        let bytes = output.bytes();
+        let mut reader = FramedReader::new(bytes.as_slice());
+        let frame = loop {
+            let frame = reader.read_frame().unwrap().unwrap();
+            if frame.msg_type() == MessageType::PING {
+                break frame;
+            }
+        };
+        assert_eq!(frame.msg_type(), MessageType::PING);
+        assert_eq!(frame.decode_body::<Keepalive>().unwrap().nonce, 1);
+        drop(release_sender);
     }
 }

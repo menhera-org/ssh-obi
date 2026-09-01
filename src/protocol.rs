@@ -15,6 +15,7 @@ pub const CAP_DETACH_V1: &str = "detach.v1";
 pub const CAP_SESSION_LIST_V1: &str = "session-list.v1";
 pub const CAP_EXIT_CODE_V1: &str = "exit-code.v1";
 pub const CAP_INITIAL_WINDOW_SIZE_V1: &str = "initial-window-size.v1";
+pub const CAP_KEEPALIVE_V1: &str = "keepalive.v1";
 
 pub const DEFAULT_CAPABILITIES: &[&str] = &[
     CAP_PTY_V1,
@@ -23,6 +24,7 @@ pub const DEFAULT_CAPABILITIES: &[&str] = &[
     CAP_SESSION_LIST_V1,
     CAP_EXIT_CODE_V1,
     CAP_INITIAL_WINDOW_SIZE_V1,
+    CAP_KEEPALIVE_V1,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,6 +48,8 @@ impl MessageType {
     pub const ERROR: Self = Self(15);
     pub const ATTACHED_SESSION: Self = Self(16);
     pub const INITIAL_WINDOW_SIZE: Self = Self(17);
+    pub const PING: Self = Self(18);
+    pub const PONG: Self = Self(19);
 
     pub const fn new(value: u8) -> Self {
         Self(value)
@@ -74,6 +78,8 @@ impl MessageType {
             Self::ERROR => "Error",
             Self::ATTACHED_SESSION => "AttachedSession",
             Self::INITIAL_WINDOW_SIZE => "InitialWindowSize",
+            Self::PING => "Ping",
+            Self::PONG => "Pong",
             _ => return None,
         })
     }
@@ -312,6 +318,11 @@ pub struct WindowSize {
     pub cols: u16,
     pub pixel_width: u16,
     pub pixel_height: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Keepalive {
+    pub nonce: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+### Added
+
+- Negotiated `keepalive.v1` heartbeats now work automatically for attached
+  sessions. The client detects an unresponsive broker and reconnects, while the
+  broker detaches clients that stop sending heartbeats so stale sessions become
+  available without user-supplied SSH options.
+
+## 0.2.1
 
 ### Added
 

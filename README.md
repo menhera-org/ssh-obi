@@ -4,7 +4,7 @@
 
 The name is from obi (帯), the Japanese sash that holds a kimono together — fitting for a tool whose job is to keep a remote shell tied to your terminal across disconnects.
 
-**Status:** the crate version is `v0.2.1`. The `0.1` wire-protocol baseline remains compatible; features continue to be negotiated through `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1`/`initial-window-size.v1` capabilities.
+**Status:** the crate version is `v0.2.1`. The `0.1` wire-protocol baseline remains compatible; features continue to be negotiated through `pty.v1`/`replay.v1`/`detach.v1`/`session-list.v1`/`exit-code.v1`/`initial-window-size.v1`/`keepalive.v1` capabilities.
 
 ## What it is
 
@@ -32,6 +32,7 @@ These clarify implementation choices that are easy to get subtly wrong:
 - **Initial window size is sent before attach.** When both sides support `initial-window-size.v1`, the client sends local terminal dimensions before `AttachSession` or `NewSession`. New sessions create the PTY with that size, and reattaches apply it before replay.
 - **New sessions print MOTD before the shell.** The daemon prints readable non-empty `/run/motd.dynamic`, `/etc/motd`, and `/etc/motd.d/*` content to the PTY before execing the login shell. A remote `~/.hushlogin` suppresses this output.
 - **Ambiguous disconnects reconnect first.** If the client loses the SSH/broker connection without a graceful `ClientShouldExit` or shell-exit report, it retries indefinitely with capped exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, then 120s. SSH transport failures during recovery, including DNS and routing failures, remain retryable. Backoff deadlines use suspend-aware monotonic machine time rather than wall time, so clock changes do not affect retries and an overdue retry proceeds promptly after laptop resume. While reconnecting, the client pauses its session-input reader and restores the local terminal's normal mode so OpenSSH can safely prompt for passphrases, passwords, host-key confirmation, or proxy authentication. If the target session is still busy because the stale broker has not gone away, the reconnecting client asks that attached client to detach and retries. If the remote definitively reports that the session is gone or cannot provide an exit status, the client fails rather than guessing success.
+- **Keepalive is automatic when negotiated.** With `keepalive.v1`, the client sends a `Ping` every 15 seconds and requires the broker's matching `Pong` within 45 seconds. The broker independently requires incoming pings within 45 seconds; on timeout it closes its daemon connection, which releases the session for reconnect. Older peers do not negotiate the capability and retain the previous behavior.
 - **Foreground command detection is best-effort only.** The daemon must not interfere with the spawned shell to improve the `WHAT` column. POSIX-ish process-group/proc-table guessing is acceptable, and failure falls back to `(unknown)`.
 - **Windows is client-only.** The Windows build can run the local `ssh-obi` client and use the system `ssh` binary, but Windows is not a supported remote server platform. Windows Terminal or another console with Windows virtual terminal input support is recommended so arrows and other line-editing keys reach the remote shell correctly.
 
