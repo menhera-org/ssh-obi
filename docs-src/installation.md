@@ -18,16 +18,10 @@ If you already have a Rust toolchain, install the local client with:
 cargo install ssh-obi
 ```
 
-This installs the client binary, `ssh-obi`. It does not install the remote
-server binary by default. For normal use, let the client bootstrap or update
-the remote server component when you connect.
-
-For remote platforms where no prebuilt server tarball is published, install a
-server-capable build in the remote account with:
-
-```sh
-cargo install --features server-bin ssh-obi
-```
+On Unix-like systems this installs both `ssh-obi` and `ssh-obi-server`; the
+`server-bin` feature is enabled by default. A client-only source build can use
+`--no-default-features --bin ssh-obi`. For normal use, the client can still
+bootstrap or update the remote server component when you connect.
 
 The attach bootstrap checks `~/.cargo/bin/ssh-obi-server` directly, so this
 works even when that directory is not on `PATH`.
@@ -36,7 +30,7 @@ OpenBSD does not have prebuilt `ssh-obi` release tarballs. On OpenBSD remote
 hosts, install a Rust toolchain first, then run:
 
 ```sh
-cargo install --features server-bin ssh-obi
+cargo install ssh-obi
 ```
 
 After that, connect normally; the bootstrap will find the Cargo-installed
@@ -84,8 +78,9 @@ handles the remote check during normal connection:
 ssh-obi user@example.com
 ```
 
-If the remote server component is missing or incompatible, the local client asks
-for confirmation and installs it into that remote account.
+If the remote server component is missing, lacks `--obi-version`, reports an
+older package version than the local client, or has an incompatible protocol,
+the local client asks for confirmation and installs it into that remote account.
 
 During normal attach, the bootstrap probes for an existing compatible server in
 this order:
@@ -95,7 +90,7 @@ this order:
 3. `ssh-obi-server` found on `PATH`
 
 The `PATH` probe supports distro-packaged installs. The direct Cargo path
-supports remote platforms where `cargo install --features server-bin ssh-obi`
+supports remote platforms where `cargo install ssh-obi`
 is the practical server install path.
 
 ## Windows Client Install

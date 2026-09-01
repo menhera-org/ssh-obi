@@ -2,8 +2,9 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::process::{Command, ExitCode, ExitStatus as ProcessExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::bootstrap::{
     INSTALL_OK_MARKER, INSTALL_REQUIRED_MARKER, READY_MARKER, remote_shell_command,
@@ -16,14 +17,16 @@ use crate::protocol::{
     ProtocolError, PtyData, SessionBusy, SessionList, SessionListRequest, WindowSize,
 };
 use crate::session::{
-    AutoSelection, SessionIdError, SessionInfo, auto_select, render_session_table,
+    AutoSelection, ExistingSelection, SessionIdError, SessionInfo, auto_select,
+    auto_select_existing, render_detach_connect_table, render_session_table,
 };
 use crate::terminal::{RawModeGuard, TerminalError};
 use crate::transport::{FramedReader, FramedWriter};
 
-const MAX_RECONNECT_ATTEMPTS: u32 = 10;
-const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(125);
-const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(120);
+const RECONNECT_SLEEP_QUANTUM: Duration = Duration::from_secs(1);
+const STDIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[cfg(unix)]
 type ClientRawModeGuard = RawModeGuard<std::io::Stdin>;
@@ -32,22 +35,64 @@ type ClientRawModeGuard = RawModeGuard<std::io::Stdin>;
 type ClientRawModeGuard = RawModeGuard;
 
 pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
+    if args.action == ClientAction::Version {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(ExitCode::SUCCESS);
+    }
+
     if matches!(args.action, ClientAction::List | ClientAction::Detach) {
         return match run_client_attempt(args, &mut None, 0)? {
             ClientAttemptResult::Control(code) => Ok(code),
+            ClientAttemptResult::DetachedForConnect { .. } => {
+                unreachable!("control action prepared detach-connect")
+            }
             ClientAttemptResult::Attached(_) => unreachable!("control action attached"),
         };
     }
 
+    let mut initial_args = args.clone();
+    if args.action == ClientAction::DetachConnect {
+        let ClientAttemptResult::DetachedForConnect {
+            session_id,
+            exit_code,
+        } = run_client_attempt(args, &mut None, 0)?
+        else {
+            unreachable!("detach-connect action returned an unexpected result");
+        };
+        if exit_code != ExitCode::SUCCESS {
+            return Ok(exit_code);
+        }
+        initial_args.action = ClientAction::Attach;
+        initial_args.session = Some(session_id);
+    }
+
     let mut attached_io = None;
-    let mut next_args = args.clone();
-    let mut known_session_id = args.session.clone();
+    let mut next_args = initial_args.clone();
+    let mut known_session_id = initial_args.session.clone();
     let mut reconnect_attempts = 0;
-    let mut attempt_id = 0;
+    let mut recovering_known_session = args.action == ClientAction::DetachConnect;
+    let mut attempt_id = 0u64;
 
     loop {
-        attempt_id += 1;
-        let result = run_client_attempt(&next_args, &mut attached_io, attempt_id)?;
+        attempt_id = attempt_id.saturating_add(1);
+        let result = match run_client_attempt(&next_args, &mut attached_io, attempt_id) {
+            Ok(result) => result,
+            Err(error) if recovering_known_session && is_retryable_reconnect_error(&error) => {
+                let session_id = known_session_id
+                    .as_deref()
+                    .expect("reconnect attempts require a known session");
+                pause_attached_io(&mut attached_io);
+                let delay = next_reconnect_delay(&mut reconnect_attempts);
+                eprintln!(
+                    "ssh-obi: reconnect attempt {} for session {session_id} failed: {error}; retrying in {}",
+                    reconnect_attempts.saturating_sub(1),
+                    format_duration(delay)
+                );
+                sleep_for_reconnect(delay);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let ClientAttemptResult::Attached(result) = result else {
             unreachable!("attach action returned a control result");
         };
@@ -58,31 +103,42 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
                 if reconnect_busy_session(
                     &failure.error,
                     known_session_id.as_deref(),
-                    reconnect_attempts > 0,
+                    recovering_known_session,
                 )
                 .is_some() =>
             {
                 let session_id =
                     reconnect_busy_session(&failure.error, known_session_id.as_deref(), true)
                         .expect("guard matched reconnect busy session");
-                let delay =
-                    next_reconnect_delay(&mut reconnect_attempts, &session_id, failure.error)?;
+                pause_attached_io(&mut attached_io);
+                let delay = next_reconnect_delay(&mut reconnect_attempts);
                 eprintln!(
-                    "ssh-obi: session {session_id} still has an attached client; requesting detach before reconnect attempt {reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS}"
+                    "ssh-obi: session {session_id} still has an attached client; requesting detach before reconnect attempt {reconnect_attempts}"
                 );
-                detach_stale_client_for_reconnect(args, &session_id).map_err(|source| {
-                    ClientRunError::ReconnectFailed {
-                        session_id: session_id.clone(),
-                        source: Box::new(source),
+                if let Err(source) = detach_stale_client_for_reconnect(args, &session_id) {
+                    if is_retryable_reconnect_error(&source) {
+                        eprintln!(
+                            "ssh-obi: detach request for session {session_id} failed: {source}; continuing reconnect attempts"
+                        );
+                    } else {
+                        return Err(ClientRunError::ReconnectFailed {
+                            session_id: session_id.clone(),
+                            source: Box::new(source),
+                        });
                     }
-                })?;
-                thread::sleep(delay);
+                }
+                eprintln!(
+                    "ssh-obi: retrying session {session_id} in {}",
+                    format_duration(delay)
+                );
+                sleep_for_reconnect(delay);
 
                 next_args = args.clone();
                 next_args.action = ClientAction::Attach;
                 next_args.session = Some(session_id);
             }
             Err(failure) if is_ambiguous_disconnect(&failure.error) => {
+                let connection_was_established = failure.confirmed_session_id.is_some();
                 let Some(session_id) = failure
                     .confirmed_session_id
                     .or_else(|| known_session_id.clone())
@@ -92,13 +148,18 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
                     )));
                 };
 
+                if connection_was_established {
+                    reconnect_attempts = 0;
+                }
+                recovering_known_session = true;
                 known_session_id = Some(session_id.clone());
-                let delay =
-                    next_reconnect_delay(&mut reconnect_attempts, &session_id, failure.error)?;
+                pause_attached_io(&mut attached_io);
+                let delay = next_reconnect_delay(&mut reconnect_attempts);
                 eprintln!(
-                    "ssh-obi: connection lost; reconnecting session {session_id} (attempt {reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS})"
+                    "ssh-obi: connection lost; reconnecting session {session_id} in {} (attempt {reconnect_attempts})",
+                    format_duration(delay)
                 );
-                thread::sleep(delay);
+                sleep_for_reconnect(delay);
 
                 next_args = args.clone();
                 next_args.action = ClientAction::Attach;
@@ -109,21 +170,9 @@ pub fn run_client(args: &ClientArgs) -> Result<ExitCode, ClientRunError> {
     }
 }
 
-fn next_reconnect_delay(
-    attempts: &mut u32,
-    session_id: &str,
-    source: ClientRunError,
-) -> Result<Duration, ClientRunError> {
-    if *attempts >= MAX_RECONNECT_ATTEMPTS {
-        return Err(ClientRunError::ReconnectAttemptsExceeded {
-            session_id: session_id.to_string(),
-            attempts: *attempts,
-            source: Box::new(source),
-        });
-    }
-
-    *attempts += 1;
-    Ok(reconnect_delay_for_attempt(*attempts))
+fn next_reconnect_delay(attempts: &mut u32) -> Duration {
+    *attempts = attempts.saturating_add(1);
+    reconnect_delay_for_attempt(*attempts)
 }
 
 fn reconnect_delay_for_attempt(attempt: u32) -> Duration {
@@ -133,6 +182,120 @@ fn reconnect_delay_for_attempt(attempt: u32) -> Duration {
     RECONNECT_INITIAL_DELAY
         .saturating_mul(multiplier)
         .min(RECONNECT_MAX_DELAY)
+}
+
+fn format_duration(duration: Duration) -> String {
+    format!("{}s", duration.as_secs())
+}
+
+fn sleep_for_reconnect(delay: Duration) {
+    let deadline = ReconnectDeadline::new(delay);
+    loop {
+        let remaining = deadline.remaining();
+        if remaining.is_zero() {
+            return;
+        }
+        thread::sleep(remaining.min(RECONNECT_SLEEP_QUANTUM));
+    }
+}
+
+#[derive(Debug)]
+struct ReconnectDeadline {
+    suspend_aware: Option<Duration>,
+    monotonic: Instant,
+}
+
+impl ReconnectDeadline {
+    fn new(delay: Duration) -> Self {
+        Self::with_now(delay, suspend_aware_machine_time(), Instant::now())
+    }
+
+    fn with_now(delay: Duration, suspend_aware: Option<Duration>, monotonic: Instant) -> Self {
+        Self {
+            suspend_aware: suspend_aware.map(|now| now.saturating_add(delay)),
+            monotonic: monotonic + delay,
+        }
+    }
+
+    fn remaining(&self) -> Duration {
+        self.remaining_at(suspend_aware_machine_time(), Instant::now())
+    }
+
+    fn remaining_at(&self, suspend_aware: Option<Duration>, monotonic: Instant) -> Duration {
+        if let (Some(deadline), Some(now)) = (self.suspend_aware, suspend_aware) {
+            return deadline.saturating_sub(now);
+        }
+
+        self.monotonic.saturating_duration_since(monotonic)
+    }
+}
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "openbsd"
+))]
+fn suspend_aware_machine_time() -> Option<Duration> {
+    let mut time = std::mem::MaybeUninit::<nix::libc::timespec>::uninit();
+    if unsafe { nix::libc::clock_gettime(nix::libc::CLOCK_BOOTTIME, time.as_mut_ptr()) } != 0 {
+        return None;
+    }
+
+    let time = unsafe { time.assume_init() };
+    let seconds = u64::try_from(time.tv_sec).ok()?;
+    let nanos = u32::try_from(time.tv_nsec).ok()?;
+    Some(Duration::new(seconds, nanos))
+}
+
+#[cfg(target_vendor = "apple")]
+fn suspend_aware_machine_time() -> Option<Duration> {
+    #[repr(C)]
+    struct MachTimebaseInfo {
+        numer: u32,
+        denom: u32,
+    }
+
+    unsafe extern "C" {
+        fn mach_continuous_time() -> u64;
+        fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
+    }
+
+    let mut info = std::mem::MaybeUninit::<MachTimebaseInfo>::uninit();
+    if unsafe { mach_timebase_info(info.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    if info.denom == 0 {
+        return None;
+    }
+
+    let ticks = unsafe { mach_continuous_time() } as u128;
+    let nanos = ticks
+        .saturating_mul(u128::from(info.numer))
+        .checked_div(u128::from(info.denom))?;
+    Some(Duration::from_nanos(
+        u64::try_from(nanos).unwrap_or(u64::MAX),
+    ))
+}
+
+#[cfg(windows)]
+fn suspend_aware_machine_time() -> Option<Duration> {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+
+    Some(Duration::from_millis(unsafe { GetTickCount64() }))
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_vendor = "apple",
+    windows
+)))]
+fn suspend_aware_machine_time() -> Option<Duration> {
+    None
 }
 
 fn detach_stale_client_for_reconnect(
@@ -145,6 +308,9 @@ fn detach_stale_client_for_reconnect(
     match run_client_attempt(&detach_args, &mut attached_io, 0)? {
         ClientAttemptResult::Control(code) if code == ExitCode::SUCCESS => Ok(()),
         ClientAttemptResult::Control(_) => Err(ClientRunError::ReconnectDetachFailed),
+        ClientAttemptResult::DetachedForConnect { .. } => {
+            unreachable!("detach action prepared detach-connect")
+        }
         ClientAttemptResult::Attached(_) => unreachable!("detach action attached"),
     }
 }
@@ -238,6 +404,13 @@ fn run_client_attempt(
             code, status,
         )));
     }
+    if let InitialActionResult::DetachedForConnect { session_id } = initial_action {
+        let status = child.wait().map_err(ClientRunError::WaitSsh)?;
+        return Ok(ClientAttemptResult::DetachedForConnect {
+            session_id,
+            exit_code: exit_code_with_ssh_status(ExitCode::SUCCESS, status),
+        });
+    }
 
     let InitialActionResult::Attached {
         session_id: initial_session_id,
@@ -269,6 +442,10 @@ pub fn server_args_for_action(_args: &ClientArgs) -> Vec<&str> {
 #[derive(Debug)]
 enum ClientAttemptResult {
     Control(ExitCode),
+    DetachedForConnect {
+        session_id: String,
+        exit_code: ExitCode,
+    },
     Attached(Result<AttachedSessionSuccess, AttachedSessionFailure>),
 }
 
@@ -295,6 +472,7 @@ impl AttachedSessionFailure {
 #[derive(Debug)]
 enum InitialActionResult {
     Control(ExitCode),
+    DetachedForConnect { session_id: String },
     Attached { session_id: Option<String> },
 }
 
@@ -346,6 +524,22 @@ where
             framed_writer.flush()?;
             Ok(InitialActionResult::Control(ExitCode::SUCCESS))
         }
+        ClientAction::DetachConnect => {
+            let session_id = match &args.session {
+                Some(session_id) => session_id.clone(),
+                None => select_detach_connect_session(reader, writer)?,
+            };
+            let mut framed_writer = FramedWriter::new(writer);
+            framed_writer.write_body(
+                MessageType::DETACH,
+                0,
+                &DetachSessionRequest {
+                    session_id: session_id.clone(),
+                },
+            )?;
+            framed_writer.flush()?;
+            Ok(InitialActionResult::DetachedForConnect { session_id })
+        }
         ClientAction::Attach => {
             let selection = if let Some(session_id) = &args.session {
                 InitialClientSelection::Attach(session_id.clone())
@@ -377,7 +571,65 @@ where
             framed_writer.flush()?;
             Ok(InitialActionResult::Attached { session_id: None })
         }
+        ClientAction::Version => unreachable!("version action does not start ssh"),
     }
+}
+
+fn select_detach_connect_session<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<String, ClientRunError>
+where
+    R: Read,
+    W: Write,
+{
+    {
+        let mut framed_writer = FramedWriter::new(&mut *writer);
+        framed_writer.write_body(
+            MessageType::SESSION_LIST_REQUEST,
+            0,
+            &SessionListRequest {
+                continue_after_response: true,
+            },
+        )?;
+        framed_writer.flush()?;
+    }
+
+    let mut framed_reader = FramedReader::new(reader);
+    let frame = read_expected_broker_frame(&mut framed_reader, MessageType::SESSION_LIST)?;
+    let list: SessionList = frame.decode_body()?;
+    let sessions = list
+        .sessions
+        .into_iter()
+        .map(SessionInfo::from_record)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    match auto_select_existing(&sessions) {
+        ExistingSelection::None => Err(ClientRunError::NoSessionsForDetachConnect),
+        ExistingSelection::Attach(session_id) => Ok(session_id.to_string()),
+        ExistingSelection::Prompt => prompt_detach_connect_selection(&sessions),
+    }
+}
+
+fn prompt_detach_connect_selection(sessions: &[SessionInfo]) -> Result<String, ClientRunError> {
+    eprintln!("Select a session to detach and connect:\n");
+    eprint!("{}", render_detach_connect_table(sessions));
+    eprint!("> ");
+    io::stderr().flush().map_err(ClientRunError::Prompt)?;
+
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(ClientRunError::Prompt)?;
+    let answer = answer.trim();
+    let selector = answer
+        .parse::<usize>()
+        .map_err(|_| ClientRunError::InvalidSessionSelection(answer.to_string()))?;
+    let session = selector
+        .checked_sub(1)
+        .and_then(|index| sessions.get(index))
+        .ok_or_else(|| ClientRunError::InvalidSessionSelection(answer.to_string()))?;
+    Ok(session.id.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -492,10 +744,25 @@ where
 
 #[derive(Debug)]
 struct AttachedIo {
-    _raw_mode: Option<ClientRawModeGuard>,
+    raw_mode: Option<ClientRawModeGuard>,
+    input_paused: bool,
     receiver: Receiver<AttachedEvent>,
     sender: Sender<AttachedEvent>,
+    stdin_control: Arc<StdinControl>,
     _stdin_thread: thread::JoinHandle<()>,
+}
+
+#[derive(Debug, Default)]
+struct StdinControl {
+    state: Mutex<StdinControlState>,
+    changed: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct StdinControlState {
+    pause_requested: bool,
+    pause_acknowledged: bool,
+    reader_finished: bool,
 }
 
 #[derive(Debug)]
@@ -516,24 +783,110 @@ fn ensure_attached_io(attached_io: &mut Option<AttachedIo>) -> Result<&AttachedI
 
         let (sender, receiver) = mpsc::channel();
         let stdin_sender = sender.clone();
-        let stdin_thread = thread::spawn(move || read_stdin_events(stdin_sender));
+        let stdin_control = Arc::new(StdinControl::default());
+        let thread_control = Arc::clone(&stdin_control);
+        let stdin_thread = thread::spawn(move || read_stdin_events(stdin_sender, thread_control));
 
         *attached_io = Some(AttachedIo {
-            _raw_mode: raw_mode,
+            raw_mode,
+            input_paused: false,
             receiver,
             sender,
+            stdin_control,
             _stdin_thread: stdin_thread,
         });
+    } else {
+        attached_io
+            .as_mut()
+            .expect("attached io initialized")
+            .resume()?;
     }
 
     Ok(attached_io.as_ref().expect("attached io initialized"))
 }
 
-fn read_stdin_events(sender: Sender<AttachedEvent>) {
+fn pause_attached_io(attached_io: &mut Option<AttachedIo>) {
+    if let Some(attached_io) = attached_io {
+        attached_io.pause();
+    }
+}
+
+impl AttachedIo {
+    fn pause(&mut self) {
+        if self.input_paused {
+            return;
+        }
+
+        let mut state = self
+            .stdin_control
+            .state
+            .lock()
+            .expect("stdin control poisoned");
+        state.pause_requested = true;
+        self.stdin_control.changed.notify_all();
+        while !state.pause_acknowledged && !state.reader_finished {
+            state = self
+                .stdin_control
+                .changed
+                .wait(state)
+                .expect("stdin control poisoned");
+        }
+        drop(state);
+
+        // The reader has stopped touching stdin, so OpenSSH can exclusively use /dev/tty (or
+        // the Windows console) while the terminal is back in its normal line-oriented mode.
+        self.raw_mode.take();
+        self.discard_pending_events();
+        self.input_paused = true;
+    }
+
+    fn resume(&mut self) -> Result<(), ClientRunError> {
+        if !self.input_paused {
+            return Ok(());
+        }
+
+        self.discard_pending_events();
+        self.raw_mode = enable_stdin_raw_mode()?;
+
+        let mut state = self
+            .stdin_control
+            .state
+            .lock()
+            .expect("stdin control poisoned");
+        state.pause_requested = false;
+        self.stdin_control.changed.notify_all();
+        while state.pause_acknowledged && !state.reader_finished {
+            state = self
+                .stdin_control
+                .changed
+                .wait(state)
+                .expect("stdin control poisoned");
+        }
+        self.input_paused = false;
+        Ok(())
+    }
+
+    fn discard_pending_events(&self) {
+        while self.receiver.try_recv().is_ok() {}
+    }
+}
+
+fn read_stdin_events(sender: Sender<AttachedEvent>, control: Arc<StdinControl>) {
+    let _finished = StdinReaderFinished(Arc::clone(&control));
     let mut stdin = io::stdin().lock();
     let mut buf = [0u8; 8192];
 
     loop {
+        wait_while_stdin_paused(&control);
+        match wait_for_stdin_ready(&stdin, STDIN_POLL_INTERVAL) {
+            Ok(false) => continue,
+            Ok(true) => {}
+            Err(err) => {
+                let _ = sender.send(AttachedEvent::StdinError(err));
+                return;
+            }
+        }
+
         match stdin.read(&mut buf) {
             Ok(0) => {
                 let _ = sender.send(AttachedEvent::StdinEof);
@@ -556,6 +909,83 @@ fn read_stdin_events(sender: Sender<AttachedEvent>) {
             }
         }
     }
+}
+
+struct StdinReaderFinished(Arc<StdinControl>);
+
+impl Drop for StdinReaderFinished {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().expect("stdin control poisoned");
+        state.reader_finished = true;
+        self.0.changed.notify_all();
+    }
+}
+
+fn wait_while_stdin_paused(control: &StdinControl) {
+    let mut state = control.state.lock().expect("stdin control poisoned");
+    if !state.pause_requested {
+        return;
+    }
+
+    state.pause_acknowledged = true;
+    control.changed.notify_all();
+    while state.pause_requested {
+        state = control.changed.wait(state).expect("stdin control poisoned");
+    }
+    state.pause_acknowledged = false;
+    control.changed.notify_all();
+}
+
+#[cfg(unix)]
+fn wait_for_stdin_ready<R>(stdin: &R, timeout: Duration) -> io::Result<bool>
+where
+    R: std::os::fd::AsRawFd,
+{
+    let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    let mut pollfd = nix::libc::pollfd {
+        fd: stdin.as_raw_fd(),
+        events: nix::libc::POLLIN,
+        revents: 0,
+    };
+
+    loop {
+        let ready = unsafe { nix::libc::poll(&mut pollfd, 1, timeout_ms) };
+        if ready >= 0 {
+            return Ok(ready > 0);
+        }
+
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_stdin_ready<R>(_stdin: &R, timeout: Duration) -> io::Result<bool> {
+    use windows_sys::Win32::Foundation::{
+        INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE};
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Ok(true);
+    }
+
+    let timeout_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+    match unsafe { WaitForSingleObject(handle, timeout_ms) } {
+        WAIT_OBJECT_0 => Ok(true),
+        WAIT_TIMEOUT => Ok(false),
+        WAIT_FAILED => Err(io::Error::last_os_error()),
+        _ => Ok(false),
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn wait_for_stdin_ready<R>(_stdin: &R, _timeout: Duration) -> io::Result<bool> {
+    Ok(true)
 }
 
 #[cfg(unix)]
@@ -1057,6 +1487,21 @@ fn is_ambiguous_disconnect(error: &ClientRunError) -> bool {
     )
 }
 
+fn is_retryable_reconnect_error(error: &ClientRunError) -> bool {
+    is_ambiguous_disconnect(error)
+        || matches!(
+            error,
+            ClientRunError::SpawnSsh(_)
+                | ClientRunError::MissingChildStdin
+                | ClientRunError::MissingChildStdout
+                | ClientRunError::UnexpectedBootstrapEof
+                | ClientRunError::ReadBootstrap(_)
+                | ClientRunError::WriteBootstrap(_)
+                | ClientRunError::WaitSsh(_)
+                | ClientRunError::ReconnectDetachFailed
+        )
+}
+
 fn wait_for_bootstrap<R, W>(reader: &mut R, writer: &mut W) -> Result<(), ClientRunError>
 where
     R: Read,
@@ -1151,15 +1596,11 @@ pub enum ClientRunError {
         session_id: String,
         source: Box<ClientRunError>,
     },
-    ReconnectAttemptsExceeded {
-        session_id: String,
-        attempts: u32,
-        source: Box<ClientRunError>,
-    },
     ReconnectDetachFailed,
     Protocol(ProtocolError),
     InvalidSession(SessionIdError),
     InvalidSessionSelection(String),
+    NoSessionsForDetachConnect,
     MissingSessionForDetach,
     WaitSsh(io::Error),
     CopyStdin(io::Error),
@@ -1207,16 +1648,6 @@ impl fmt::Display for ClientRunError {
             Self::ReconnectFailed { session_id, source } => {
                 write!(f, "failed to reconnect session {session_id}: {source}")
             }
-            Self::ReconnectAttemptsExceeded {
-                session_id,
-                attempts,
-                source,
-            } => {
-                write!(
-                    f,
-                    "failed to reconnect session {session_id} after {attempts} attempts: {source}"
-                )
-            }
             Self::ReconnectDetachFailed => write!(
                 f,
                 "failed to ask the stale attached client to detach during reconnect"
@@ -1225,6 +1656,9 @@ impl fmt::Display for ClientRunError {
             Self::InvalidSession(err) => write!(f, "invalid session from broker: {err}"),
             Self::InvalidSessionSelection(selection) => {
                 write!(f, "invalid session selection: {selection}")
+            }
+            Self::NoSessionsForDetachConnect => {
+                write!(f, "there are no existing sessions to detach and connect")
             }
             Self::MissingSessionForDetach => write!(f, "--detach requires --session ID"),
             Self::WaitSsh(err) => write!(f, "failed to wait for ssh: {err}"),
@@ -1253,7 +1687,6 @@ impl std::error::Error for ClientRunError {
             Self::InvalidSession(err) => Some(err),
             Self::ConnectionLostBeforeSessionKnown(err) => Some(err),
             Self::ReconnectFailed { source, .. } => Some(source),
-            Self::ReconnectAttemptsExceeded { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -1275,6 +1708,7 @@ impl From<SessionIdError> for ClientRunError {
 mod tests {
     use super::*;
     use crate::cli::{ClientAction, ClientArgs};
+    use crate::protocol::{SessionRecord, UnixTimeMillis};
     use std::ffi::OsString;
     use std::io::Cursor;
 
@@ -1290,9 +1724,11 @@ mod tests {
     fn attached_io_for_test() -> AttachedIo {
         let (sender, receiver) = mpsc::channel();
         AttachedIo {
-            _raw_mode: None,
+            raw_mode: None,
+            input_paused: false,
             receiver,
             sender,
+            stdin_control: Arc::new(StdinControl::default()),
             _stdin_thread: thread::spawn(|| {}),
         }
     }
@@ -1306,9 +1742,104 @@ mod tests {
         }
     }
 
+    fn session_record(session_id: &str, attached: bool) -> SessionRecord {
+        SessionRecord {
+            session_id: session_id.to_string(),
+            init_time: UnixTimeMillis(1_000),
+            last_detach_time: None,
+            current_command: "sh".to_string(),
+            attached,
+        }
+    }
+
     #[test]
     fn detach_action_uses_broker_default() {
         assert!(server_args_for_action(&args(ClientAction::Detach)).is_empty());
+    }
+
+    #[test]
+    fn detach_connect_with_session_override_writes_detach_request() {
+        let mut args = args(ClientAction::DetachConnect);
+        args.session = Some("aaaaaaaa".to_string());
+        let mut output = Vec::new();
+
+        let action = handle_initial_action(&args, &mut &[][..], &mut output, None).unwrap();
+        assert!(matches!(
+            action,
+            InitialActionResult::DetachedForConnect { session_id }
+                if session_id == "aaaaaaaa"
+        ));
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::DETACH);
+        let request: DetachSessionRequest = frame.decode_body().unwrap();
+        assert_eq!(request.session_id, "aaaaaaaa");
+        assert!(reader.read_frame().unwrap().is_none());
+    }
+
+    #[test]
+    fn detach_connect_auto_selects_the_only_session() {
+        let mut input = Vec::new();
+        {
+            let mut writer = FramedWriter::new(&mut input);
+            writer
+                .write_body(
+                    MessageType::SESSION_LIST,
+                    0,
+                    &SessionList {
+                        sessions: vec![session_record("aaaaaaaa", true)],
+                    },
+                )
+                .unwrap();
+        }
+        let mut output = Vec::new();
+
+        let action = handle_initial_action(
+            &args(ClientAction::DetachConnect),
+            &mut input.as_slice(),
+            &mut output,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            action,
+            InitialActionResult::DetachedForConnect { session_id }
+                if session_id == "aaaaaaaa"
+        ));
+
+        let mut reader = FramedReader::new(output.as_slice());
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::SESSION_LIST_REQUEST);
+        let request: SessionListRequest = frame.decode_body().unwrap();
+        assert!(request.continue_after_response);
+        let frame = reader.read_frame().unwrap().unwrap();
+        assert_eq!(frame.msg_type(), MessageType::DETACH);
+        let request: DetachSessionRequest = frame.decode_body().unwrap();
+        assert_eq!(request.session_id, "aaaaaaaa");
+    }
+
+    #[test]
+    fn detach_connect_rejects_an_empty_session_list() {
+        let mut input = Vec::new();
+        FramedWriter::new(&mut input)
+            .write_body(
+                MessageType::SESSION_LIST,
+                0,
+                &SessionList {
+                    sessions: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        let error = handle_initial_action(
+            &args(ClientAction::DetachConnect),
+            &mut input.as_slice(),
+            &mut Vec::new(),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, ClientRunError::NoSessionsForDetachConnect));
     }
 
     #[test]
@@ -1436,46 +1967,100 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_delay_uses_small_capped_exponential_backoff() {
-        assert_eq!(reconnect_delay_for_attempt(1), Duration::from_millis(125));
-        assert_eq!(reconnect_delay_for_attempt(2), Duration::from_millis(250));
-        assert_eq!(reconnect_delay_for_attempt(3), Duration::from_millis(500));
-        assert_eq!(reconnect_delay_for_attempt(4), Duration::from_secs(1));
-        assert_eq!(reconnect_delay_for_attempt(5), Duration::from_secs(2));
-        assert_eq!(reconnect_delay_for_attempt(6), Duration::from_secs(2));
-        assert_eq!(reconnect_delay_for_attempt(10), Duration::from_secs(2));
+    fn reconnect_delay_uses_sparse_capped_exponential_backoff() {
+        assert_eq!(reconnect_delay_for_attempt(1), Duration::from_secs(1));
+        assert_eq!(reconnect_delay_for_attempt(2), Duration::from_secs(2));
+        assert_eq!(reconnect_delay_for_attempt(3), Duration::from_secs(4));
+        assert_eq!(reconnect_delay_for_attempt(4), Duration::from_secs(8));
+        assert_eq!(reconnect_delay_for_attempt(5), Duration::from_secs(16));
+        assert_eq!(reconnect_delay_for_attempt(6), Duration::from_secs(32));
+        assert_eq!(reconnect_delay_for_attempt(7), Duration::from_secs(64));
+        assert_eq!(reconnect_delay_for_attempt(8), Duration::from_secs(120));
+        assert_eq!(reconnect_delay_for_attempt(10), Duration::from_secs(120));
     }
 
     #[test]
-    fn next_reconnect_delay_allows_ten_attempts_then_fails() {
+    fn next_reconnect_delay_does_not_expire() {
         let mut attempts = 0;
 
-        for expected_attempt in 1..=MAX_RECONNECT_ATTEMPTS {
-            next_reconnect_delay(
-                &mut attempts,
-                "aaaaaaaa",
-                ClientRunError::UnexpectedBrokerEof,
-            )
-            .unwrap();
+        for expected_attempt in 1..=100 {
+            let delay = next_reconnect_delay(&mut attempts);
             assert_eq!(attempts, expected_attempt);
+            assert!(delay <= RECONNECT_MAX_DELAY);
         }
+    }
 
-        let err = next_reconnect_delay(
-            &mut attempts,
-            "aaaaaaaa",
-            ClientRunError::UnexpectedBrokerEof,
-        )
-        .unwrap_err();
+    #[test]
+    fn reconnect_deadline_counts_suspend_aware_machine_time() {
+        let monotonic = Instant::now();
+        let deadline = ReconnectDeadline::with_now(
+            Duration::from_secs(120),
+            Some(Duration::from_secs(1_000)),
+            monotonic,
+        );
 
-        assert!(matches!(
-            err,
-            ClientRunError::ReconnectAttemptsExceeded {
-                session_id,
-                attempts: MAX_RECONNECT_ATTEMPTS,
-                source,
-            } if session_id == "aaaaaaaa"
-                && matches!(*source, ClientRunError::UnexpectedBrokerEof)
+        assert_eq!(
+            deadline.remaining_at(Some(Duration::from_secs(1_060)), monotonic),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            deadline.remaining_at(Some(Duration::from_secs(1_120)), monotonic),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn reconnect_deadline_falls_back_to_monotonic_time() {
+        let monotonic = Instant::now();
+        let deadline = ReconnectDeadline::with_now(Duration::from_secs(5), None, monotonic);
+
+        assert_eq!(
+            deadline.remaining_at(None, monotonic + Duration::from_secs(2)),
+            Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn ssh_transport_failures_remain_retryable_during_reconnect() {
+        assert!(is_retryable_reconnect_error(
+            &ClientRunError::UnexpectedBootstrapEof
         ));
+        assert!(is_retryable_reconnect_error(
+            &ClientRunError::ReadBootstrap(io::Error::from(io::ErrorKind::HostUnreachable))
+        ));
+        assert!(is_retryable_reconnect_error(
+            &ClientRunError::ReadBootstrap(io::Error::from(io::ErrorKind::NotFound))
+        ));
+        assert!(is_retryable_reconnect_error(
+            &ClientRunError::UnexpectedBrokerEof
+        ));
+        assert!(is_retryable_reconnect_error(
+            &ClientRunError::ReconnectDetachFailed
+        ));
+        assert!(!is_retryable_reconnect_error(
+            &ClientRunError::RemoteBootstrap("incompatible server".to_string())
+        ));
+    }
+
+    #[test]
+    fn stdin_pause_control_acknowledges_and_resumes() {
+        let control = Arc::new(StdinControl::default());
+        control.state.lock().unwrap().pause_requested = true;
+        let worker_control = Arc::clone(&control);
+        let worker = thread::spawn(move || wait_while_stdin_paused(&worker_control));
+
+        let mut state = control.state.lock().unwrap();
+        while !state.pause_acknowledged {
+            state = control.changed.wait(state).unwrap();
+        }
+        state.pause_requested = false;
+        control.changed.notify_all();
+        while state.pause_acknowledged {
+            state = control.changed.wait(state).unwrap();
+        }
+        drop(state);
+
+        worker.join().unwrap();
     }
 
     #[test]

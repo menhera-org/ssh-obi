@@ -5,12 +5,14 @@ pub const READY_MARKER: &str = "OBI-SERVER-READY";
 pub const INSTALL_REQUIRED_MARKER: &str = "OBI-INSTALL-REQUIRED";
 pub const INSTALL_OK_MARKER: &str = "OBI-INSTALL-OK";
 pub const DEFAULT_TERM: &str = "xterm-256color";
+pub const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn remote_shell_command(server_args: &[&str], term: &str) -> String {
     let mut command = format!(
-        "sh -c {} sh {} --term {}",
+        "sh -c {} sh {} --client-version {} --term {}",
         shell_quote(SCRIPT),
         shell_quote(CURRENT_PROTOCOL_BASELINE),
+        shell_quote(CRATE_VERSION),
         shell_quote(term)
     );
     for arg in server_args {
@@ -85,7 +87,9 @@ mod tests {
         let server = cargo_bin.join("ssh-obi-server");
         fs::write(
             &server,
-            "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nprintf 'FAKE-SERVER %s\\n' \"$*\"\n",
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nif [ \"$1\" = \"--obi-version\" ]; then printf '{CRATE_VERSION}\\n'; exit 0; fi\nprintf 'FAKE-SERVER %s\\n' \"$*\"\n"
+            ),
         )
         .unwrap();
         let mut perms = fs::metadata(&server).unwrap().permissions();
@@ -96,7 +100,9 @@ mod tests {
             .arg("-c")
             .arg(SCRIPT)
             .arg("sh")
-            .arg("0.1")
+            .arg(CURRENT_PROTOCOL_BASELINE)
+            .arg("--client-version")
+            .arg(CRATE_VERSION)
             .arg("--term")
             .arg("vt100")
             .arg("--probe")
@@ -135,7 +141,9 @@ mod tests {
         let server = bin.join("ssh-obi-server");
         fs::write(
             &server,
-            "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nprintf 'PATH-SERVER %s\\n' \"$*\"\n",
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nif [ \"$1\" = \"--obi-version\" ]; then printf '{CRATE_VERSION}\\n'; exit 0; fi\nprintf 'PATH-SERVER %s\\n' \"$*\"\n"
+            ),
         )
         .unwrap();
         let mut perms = fs::metadata(&server).unwrap().permissions();
@@ -147,7 +155,9 @@ mod tests {
             .arg("-c")
             .arg(SCRIPT)
             .arg("sh")
-            .arg("0.1")
+            .arg(CURRENT_PROTOCOL_BASELINE)
+            .arg("--client-version")
+            .arg(CRATE_VERSION)
             .arg("--term")
             .arg("vt100")
             .arg("--probe")
@@ -187,7 +197,7 @@ mod tests {
         assert!(!output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries."));
-        assert!(stdout.contains("cargo install --features server-bin ssh-obi"));
+        assert!(stdout.contains("cargo install ssh-obi"));
     }
 
     #[cfg(unix)]
@@ -248,6 +258,88 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn embedded_script_rejects_an_older_openbsd_server() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = openbsd_uname_test_root("old-server");
+        let home = root.join("home");
+        let bin = root.join("bin");
+        make_fake_openbsd_uname(&bin);
+        std::fs::create_dir_all(&home).unwrap();
+        let server = bin.join("ssh-obi-server");
+        std::fs::write(
+            &server,
+            "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nif [ \"$1\" = \"--obi-version\" ]; then printf '0.1.3\\n'; exit 0; fi\nexit 1\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&server).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&server, permissions).unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg("sh")
+            .arg("0.1")
+            .arg("--client-version")
+            .arg(CRATE_VERSION)
+            .arg("--install")
+            .env("HOME", &home)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries."));
+        assert!(stdout.contains("cargo install ssh-obi"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_script_rejects_a_server_without_obi_version() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = openbsd_uname_test_root("missing-version-option");
+        let home = root.join("home");
+        let bin = root.join("bin");
+        make_fake_openbsd_uname(&bin);
+        std::fs::create_dir_all(&home).unwrap();
+        let server = bin.join("ssh-obi-server");
+        std::fs::write(
+            &server,
+            "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nexit 2\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&server).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&server, permissions).unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(SCRIPT)
+            .arg("sh")
+            .arg(CURRENT_PROTOCOL_BASELINE)
+            .arg("--client-version")
+            .arg(CRATE_VERSION)
+            .arg("--install")
+            .env("HOME", &home)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries."));
+        assert!(stdout.contains("cargo install ssh-obi"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn embedded_script_warns_openbsd_after_auto_install_confirmation() {
         let root = openbsd_uname_test_root("auto-install");
         let home = root.join("home");
@@ -281,21 +373,23 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("OBI-INSTALL-REQUIRED\n"));
         assert!(stdout.contains("OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries."));
-        assert!(stdout.contains("cargo install --features server-bin ssh-obi"));
+        assert!(stdout.contains("cargo install ssh-obi"));
     }
 
     #[test]
     fn remote_command_runs_stdin_script_with_baseline() {
         let command = remote_shell_command(&[], "xterm-256color");
         assert!(command.starts_with("sh -c '"));
-        assert!(command.ends_with(" sh 0.1 --term xterm-256color"));
+        assert!(command.ends_with(&format!(
+            " sh {CURRENT_PROTOCOL_BASELINE} --client-version {CRATE_VERSION} --term xterm-256color"
+        )));
     }
 
     #[test]
     fn remote_command_passes_server_args() {
-        assert!(
-            remote_shell_command(&["--detach"], "xterm").ends_with(" sh 0.1 --term xterm --detach")
-        );
+        assert!(remote_shell_command(&["--detach"], "xterm").ends_with(&format!(
+            " sh {CURRENT_PROTOCOL_BASELINE} --client-version {CRATE_VERSION} --term xterm --detach"
+        )));
     }
 
     #[test]
@@ -348,7 +442,7 @@ mod tests {
         std::fs::write(
             path,
             format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nprintf '{name} %s\\n' \"$*\"\n"
+                "#!/bin/sh\nif [ \"$1\" = \"--protocol-check\" ]; then exit 0; fi\nif [ \"$1\" = \"--obi-version\" ]; then printf '{CRATE_VERSION}\\n'; exit 0; fi\nprintf '{name} %s\\n' \"$*\"\n"
             ),
         )
         .unwrap();

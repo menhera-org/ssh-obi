@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-61b04a7d.js";
+            window.path_to_searchindex_js = "searchindex-6c165253.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -194,6 +194,15 @@
 <p>Detach the attached client for a specific session and exit:</p>
 <pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
 </code></pre>
+<p>Detach an existing client and connect to that session:</p>
+<pre><code class="language-sh">ssh-obi --detach-connect user@example.com
+</code></pre>
+<p>The only session is selected automatically. If several sessions exist, a
+selector includes both busy and free sessions. <code>--session abc123</code> overrides
+selection.</p>
+<p>Print the client package version and exit:</p>
+<pre><code class="language-sh">ssh-obi --obi-version
+</code></pre>
 <p>Detach from inside the remote shell:</p>
 <pre><code class="language-sh">ssh-obi-server --detach
 </code></pre>
@@ -249,8 +258,12 @@ recovered, the client reports failure rather than guessing success.</p>
 reports an attached client, <code>ssh-obi</code> sends a detach request for that same
 session and retries the attach. Normal first-time attach attempts do not detach
 busy sessions automatically.</p>
-<p>Reconnect retries use 125ms, 250ms, 500ms, 1s, and then capped 2s delays. The
-client gives up after 10 attempts.</p>
+<p>Reconnect retries continue indefinitely through temporary SSH transport, DNS,
+and routing failures. Delays are 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most
+120s. Suspend-aware monotonic machine time controls the deadline, so changing
+the wall clock has no effect and overdue attempts continue promptly after
+laptop resume. During recovery the client pauses its stdin reader and restores
+normal terminal mode, allowing OpenSSH prompts to interact with the user.</p>
 <p>A deliberate detach through <code>ssh-obi-server --detach</code> is graceful. The client
 exits with status 0 and does not reconnect.</p>
 

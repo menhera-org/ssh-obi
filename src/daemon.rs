@@ -90,6 +90,7 @@ mod runtime {
     use std::fs;
     use std::io::{self, Read, Write};
     use std::os::fd::AsFd;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -128,9 +129,11 @@ mod runtime {
             return Err(DaemonError::SocketAlreadyExists(socket_path));
         }
 
-        // Bind before daemonizing. The socket is created with the launcher's umask and is
-        // protected by the explicitly validated 0700 parent directory.
+        // Bind before daemonizing, then set an explicit owner-only mode so even an unusually
+        // restrictive launcher umask cannot make the socket unusable. The validated 0700 parent
+        // directory provides the namespace boundary without changing the shell's inherited umask.
         let listener = UnixListener::bind(&socket_path).map_err(DaemonError::Bind)?;
+        set_daemon_socket_permissions(&socket_path)?;
         listener
             .set_nonblocking(true)
             .map_err(DaemonError::Listen)?;
@@ -188,6 +191,15 @@ mod runtime {
 
         let _ = fs::remove_file(&socket_path);
         Ok(())
+    }
+
+    fn set_daemon_socket_permissions(socket_path: &std::path::Path) -> Result<(), DaemonError> {
+        fs::set_permissions(socket_path, fs::Permissions::from_mode(0o600)).map_err(|source| {
+            DaemonError::SocketPermissions {
+                path: socket_path.to_path_buf(),
+                source,
+            }
+        })
     }
 
     fn daemonize_after_bind() -> Result<(), DaemonError> {
@@ -681,6 +693,7 @@ mod runtime {
         SessionId(SessionIdError),
         SocketPath(SocketPathError),
         SocketAlreadyExists(PathBuf),
+        SocketPermissions { path: PathBuf, source: io::Error },
         Fork(nix::errno::Errno),
         SetSid(nix::errno::Errno),
         Chdir(nix::errno::Errno),
@@ -707,6 +720,11 @@ mod runtime {
                 Self::SocketAlreadyExists(path) => {
                     write!(f, "daemon socket already exists: {}", path.display())
                 }
+                Self::SocketPermissions { path, source } => write!(
+                    f,
+                    "failed to set owner-only permissions on daemon socket {}: {source}",
+                    path.display()
+                ),
                 Self::Fork(err) => write!(f, "failed to fork daemon: {err}"),
                 Self::SetSid(err) => write!(f, "failed to create daemon session: {err}"),
                 Self::Chdir(err) => write!(f, "failed to chdir daemon to /: {err}"),
@@ -734,6 +752,7 @@ mod runtime {
             match self {
                 Self::SessionId(err) => Some(err),
                 Self::SocketPath(err) => Some(err),
+                Self::SocketPermissions { source, .. } => Some(source),
                 Self::Bind(err)
                 | Self::Listen(err)
                 | Self::Accept(err)
@@ -833,6 +852,30 @@ mod runtime {
             let output = motd_to_print_from(home.join(".hushlogin"), [file], motd_dir);
 
             assert!(output.is_empty());
+            let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn daemon_socket_permissions_are_owner_only() {
+            let root = temp_test_dir("socket-mode");
+            fs::create_dir_all(&root).unwrap();
+            let socket = root.join("session.sock");
+            let _listener = match UnixListener::bind(&socket) {
+                Ok(listener) => listener,
+                Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                    // Some test sandboxes prohibit creating Unix sockets even in writable
+                    // temporary directories. Runtime and cross-target checks still cover the
+                    // platform-specific call in that environment.
+                    let _ = fs::remove_dir_all(root);
+                    return;
+                }
+                Err(err) => panic!("failed to bind test socket: {err}"),
+            };
+
+            set_daemon_socket_permissions(&socket).unwrap();
+
+            let mode = fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
             let _ = fs::remove_dir_all(root);
         }
 

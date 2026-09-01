@@ -8,25 +8,25 @@ is intentionally user-facing.
 Build the client:
 
 ```sh
-cargo build --release
+cargo build --release --no-default-features --bin ssh-obi
 ```
 
 Build both client and server:
 
 ```sh
-cargo build --release --features server-bin --bins
+cargo build --release --bins
 ```
 
 Run tests:
 
 ```sh
-cargo test --features server-bin
+cargo test --all-targets
 ```
 
 Run clippy:
 
 ```sh
-cargo clippy --all-targets --features server-bin -- -D warnings
+cargo clippy --all-targets -- -D warnings
 ```
 
 Format:
@@ -57,9 +57,9 @@ Pages after each build:
 
 ## Release Builds
 
-The current release is `v0.1.3`. It is published to crates.io and tagged on
-GitHub as `v0.1.3`. Release tarballs for the bootstrap installers are served
-from `https://obi.menhera.org/`.
+The crate version is `v0.2.0`. The wire-protocol baseline remains `0.1`.
+Release tarballs for the bootstrap installers are served from
+`https://obi.menhera.org/`.
 
 Use:
 

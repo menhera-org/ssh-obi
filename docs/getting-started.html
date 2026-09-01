@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-61b04a7d.js";
+            window.path_to_searchindex_js = "searchindex-6c165253.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -184,11 +184,13 @@
 <p>The client starts the system <code>ssh</code> binary and prepares the remote side over the
 same SSH connection. If a compatible server component is already installed, the
 session starts immediately.</p>
-<p>If a compatible server is already installed at <code>~/.ssh-obi/bin</code>, at
-<code>~/.cargo/bin</code>, or on the remote <code>PATH</code>, <code>ssh-obi</code> uses it. If the server
-component is missing or incompatible and a prebuilt tarball exists for the
-remote platform, <code>ssh-obi</code> asks before installing it into <code>~/.ssh-obi/bin</code> on
-the remote account. No root access is needed for the built-in install path.</p>
+<p>If a compatible, sufficiently recent server is already installed at
+<code>~/.ssh-obi/bin</code>, at <code>~/.cargo/bin</code>, or on the remote <code>PATH</code>, <code>ssh-obi</code> uses it.
+The bootstrap checks protocol compatibility and compares the server’s
+<code>--obi-version</code> output with the local client’s compiled version. A missing
+version option or an older server enters the install path. If a prebuilt
+tarball exists for the remote platform, <code>ssh-obi</code> asks before installing it
+into <code>~/.ssh-obi/bin</code> on the remote account. No root access is needed.</p>
 <p>After installation, <code>ssh-obi</code> attaches to a new or existing session.</p>
 <p>When a new session is created, the remote host MOTD is printed before the shell
 starts, unless the remote account has <code>~/.hushlogin</code>.</p>
@@ -209,6 +211,9 @@ starts, unless the remote account has <code>~/.hushlogin</code>.</p>
 </code></pre>
 <p>Busy sessions are shown by <code>--list</code>, but they are not selectable in the
 interactive picker.</p>
+<p>To take over an existing session, use <code>ssh-obi --detach-connect user@host</code>.
+The only session is selected automatically; multiple sessions produce a picker
+that includes both free and busy sessions. <code>--session ID</code> overrides selection.</p>
 <h2 id="detach-without-killing-the-shell"><a class="header" href="#detach-without-killing-the-shell">Detach Without Killing The Shell</a></h2>
 <p>From inside the remote shell:</p>
 <pre><code class="language-sh">ssh-obi-server --detach
@@ -223,9 +228,13 @@ connection disappears without a graceful detach or shell exit report, the
 client reconnects and asks for the same session.</p>
 <p>If the old broker is still attached when reconnect starts, the reconnecting
 client asks that stale client to detach and then retries the attach.</p>
-<p>Reconnect retries use short exponential backoff delays: 125ms, 250ms, 500ms,
-1s, then 2s for later attempts. The client gives up after 10 reconnect
-attempts.</p>
+<p>Reconnect retries continue indefinitely through temporary SSH, DNS, and routing
+failures. Delays are 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most 120s. The
+deadline uses suspend-aware monotonic machine time, so wall-clock changes do not
+affect it and an overdue attempt continues promptly after laptop resume.</p>
+<p>While recovering, the client restores normal terminal mode and pauses its stdin
+reader. OpenSSH can therefore ask for key passphrases, passwords, host-key
+confirmation, and proxy authentication on subsequent connections.</p>
 <p>On reattach, recent output is replayed first, then live forwarding resumes. The
 replay buffer is bounded, so old history belongs in your local terminal
 scrollback.</p>

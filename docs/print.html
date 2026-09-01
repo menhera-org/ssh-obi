@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-61b04a7d.js";
+            window.path_to_searchindex_js = "searchindex-6c165253.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -193,12 +193,9 @@ use.</li>
 panes, tabs, or in-band escape commands. If you want window management, run
 <code>tmux</code> or another multiplexer inside the remote shell.</p>
 <h2 id="status"><a class="header" href="#status">Status</a></h2>
-<p><code>ssh-obi</code> <code>v0.1.3</code> is the current release. It is available on crates.io,
-tagged as <code>v0.1.3</code> on GitHub, and distributed as release tarballs from
-<code>https://obi.menhera.org/</code>.</p>
-<p>The <code>v0.1.3</code> release adds MOTD printing before new session shells start and
-caps automatic reconnect retries with a small exponential backoff. The <code>0.1</code>
-wire protocol baseline remains unchanged.</p>
+<p>The crate version is <code>v0.2.0</code>. It adds durable interactive reconnection,
+session takeover, version-aware remote bootstrap, and correct login-shell umask
+inheritance. The <code>0.1</code> wire-protocol baseline remains compatible.</p>
 <p>The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
 <h2 id="quick-examples"><a class="header" href="#quick-examples">Quick Examples</a></h2>
@@ -217,6 +214,14 @@ bootstrap scripts, release tarballs, install flow, and supported platforms.</p>
 <p>Detach the currently attached client for a known session from your local
 machine:</p>
 <pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
+</code></pre>
+<p>Detach an existing client and connect to that session yourself:</p>
+<pre><code class="language-sh">ssh-obi --detach-connect user@example.com
+</code></pre>
+<p>With exactly one session it is selected automatically. With several sessions,
+the client shows a selector. Add <code>--session abc123</code> to choose explicitly.</p>
+<p>Print the installed crate version:</p>
+<pre><code class="language-sh">ssh-obi --obi-version
 </code></pre>
 <p>Or detach from inside the remote shell without killing it:</p>
 <pre><code class="language-sh">ssh-obi-server --detach
@@ -253,11 +258,13 @@ published tarball names.</li>
 <p>The client starts the system <code>ssh</code> binary and prepares the remote side over the
 same SSH connection. If a compatible server component is already installed, the
 session starts immediately.</p>
-<p>If a compatible server is already installed at <code>~/.ssh-obi/bin</code>, at
-<code>~/.cargo/bin</code>, or on the remote <code>PATH</code>, <code>ssh-obi</code> uses it. If the server
-component is missing or incompatible and a prebuilt tarball exists for the
-remote platform, <code>ssh-obi</code> asks before installing it into <code>~/.ssh-obi/bin</code> on
-the remote account. No root access is needed for the built-in install path.</p>
+<p>If a compatible, sufficiently recent server is already installed at
+<code>~/.ssh-obi/bin</code>, at <code>~/.cargo/bin</code>, or on the remote <code>PATH</code>, <code>ssh-obi</code> uses it.
+The bootstrap checks protocol compatibility and compares the server’s
+<code>--obi-version</code> output with the local client’s compiled version. A missing
+version option or an older server enters the install path. If a prebuilt
+tarball exists for the remote platform, <code>ssh-obi</code> asks before installing it
+into <code>~/.ssh-obi/bin</code> on the remote account. No root access is needed.</p>
 <p>After installation, <code>ssh-obi</code> attaches to a new or existing session.</p>
 <p>When a new session is created, the remote host MOTD is printed before the shell
 starts, unless the remote account has <code>~/.hushlogin</code>.</p>
@@ -278,6 +285,9 @@ starts, unless the remote account has <code>~/.hushlogin</code>.</p>
 </code></pre>
 <p>Busy sessions are shown by <code>--list</code>, but they are not selectable in the
 interactive picker.</p>
+<p>To take over an existing session, use <code>ssh-obi --detach-connect user@host</code>.
+The only session is selected automatically; multiple sessions produce a picker
+that includes both free and busy sessions. <code>--session ID</code> overrides selection.</p>
 <h2 id="detach-without-killing-the-shell"><a class="header" href="#detach-without-killing-the-shell">Detach Without Killing The Shell</a></h2>
 <p>From inside the remote shell:</p>
 <pre><code class="language-sh">ssh-obi-server --detach
@@ -292,9 +302,13 @@ connection disappears without a graceful detach or shell exit report, the
 client reconnects and asks for the same session.</p>
 <p>If the old broker is still attached when reconnect starts, the reconnecting
 client asks that stale client to detach and then retries the attach.</p>
-<p>Reconnect retries use short exponential backoff delays: 125ms, 250ms, 500ms,
-1s, then 2s for later attempts. The client gives up after 10 reconnect
-attempts.</p>
+<p>Reconnect retries continue indefinitely through temporary SSH, DNS, and routing
+failures. Delays are 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most 120s. The
+deadline uses suspend-aware monotonic machine time, so wall-clock changes do not
+affect it and an overdue attempt continues promptly after laptop resume.</p>
+<p>While recovering, the client restores normal terminal mode and pauses its stdin
+reader. OpenSSH can therefore ask for key passphrases, passwords, host-key
+confirmation, and proxy authentication on subsequent connections.</p>
 <p>On reattach, recent output is replayed first, then live forwarding resumes. The
 replay buffer is bounded, so old history belongs in your local terminal
 scrollback.</p>
@@ -311,18 +325,15 @@ HTTPS.</p>
 <p>If you already have a Rust toolchain, install the local client with:</p>
 <pre><code class="language-sh">cargo install ssh-obi
 </code></pre>
-<p>This installs the client binary, <code>ssh-obi</code>. It does not install the remote
-server binary by default. For normal use, let the client bootstrap or update
-the remote server component when you connect.</p>
-<p>For remote platforms where no prebuilt server tarball is published, install a
-server-capable build in the remote account with:</p>
-<pre><code class="language-sh">cargo install --features server-bin ssh-obi
-</code></pre>
+<p>On Unix-like systems this installs both <code>ssh-obi</code> and <code>ssh-obi-server</code>; the
+<code>server-bin</code> feature is enabled by default. A client-only source build can use
+<code>--no-default-features --bin ssh-obi</code>. For normal use, the client can still
+bootstrap or update the remote server component when you connect.</p>
 <p>The attach bootstrap checks <code>~/.cargo/bin/ssh-obi-server</code> directly, so this
 works even when that directory is not on <code>PATH</code>.</p>
 <p>OpenBSD does not have prebuilt <code>ssh-obi</code> release tarballs. On OpenBSD remote
 hosts, install a Rust toolchain first, then run:</p>
-<pre><code class="language-sh">cargo install --features server-bin ssh-obi
+<pre><code class="language-sh">cargo install ssh-obi
 </code></pre>
 <p>After that, connect normally; the bootstrap will find the Cargo-installed
 <code>ssh-obi-server</code>.</p>
@@ -357,8 +368,9 @@ not add duplicate <code>ssh-obi</code> PATH entries to shell startup files.</p>
 handles the remote check during normal connection:</p>
 <pre><code class="language-sh">ssh-obi user@example.com
 </code></pre>
-<p>If the remote server component is missing or incompatible, the local client asks
-for confirmation and installs it into that remote account.</p>
+<p>If the remote server component is missing, lacks <code>--obi-version</code>, reports an
+older package version than the local client, or has an incompatible protocol,
+the local client asks for confirmation and installs it into that remote account.</p>
 <p>During normal attach, the bootstrap probes for an existing compatible server in
 this order:</p>
 <ol>
@@ -367,7 +379,7 @@ this order:</p>
 <li><code>ssh-obi-server</code> found on <code>PATH</code></li>
 </ol>
 <p>The <code>PATH</code> probe supports distro-packaged installs. The direct Cargo path
-supports remote platforms where <code>cargo install --features server-bin ssh-obi</code>
+supports remote platforms where <code>cargo install ssh-obi</code>
 is the practical server install path.</p>
 <h2 id="windows-client-install"><a class="header" href="#windows-client-install">Windows Client Install</a></h2>
 <p>Windows can run the client only. It cannot run the remote server.</p>
@@ -443,6 +455,15 @@ user PATH.</p>
 <p>Detach the attached client for a specific session and exit:</p>
 <pre><code class="language-sh">ssh-obi --detach --session abc123 user@example.com
 </code></pre>
+<p>Detach an existing client and connect to that session:</p>
+<pre><code class="language-sh">ssh-obi --detach-connect user@example.com
+</code></pre>
+<p>The only session is selected automatically. If several sessions exist, a
+selector includes both busy and free sessions. <code>--session abc123</code> overrides
+selection.</p>
+<p>Print the client package version and exit:</p>
+<pre><code class="language-sh">ssh-obi --obi-version
+</code></pre>
 <p>Detach from inside the remote shell:</p>
 <pre><code class="language-sh">ssh-obi-server --detach
 </code></pre>
@@ -498,8 +519,12 @@ recovered, the client reports failure rather than guessing success.</p>
 reports an attached client, <code>ssh-obi</code> sends a detach request for that same
 session and retries the attach. Normal first-time attach attempts do not detach
 busy sessions automatically.</p>
-<p>Reconnect retries use 125ms, 250ms, 500ms, 1s, and then capped 2s delays. The
-client gives up after 10 attempts.</p>
+<p>Reconnect retries continue indefinitely through temporary SSH transport, DNS,
+and routing failures. Delays are 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most
+120s. Suspend-aware monotonic machine time controls the deadline, so changing
+the wall clock has no effect and overdue attempts continue promptly after
+laptop resume. During recovery the client pauses its stdin reader and restores
+normal terminal mode, allowing OpenSSH prompts to interact with the user.</p>
 <p>A deliberate detach through <code>ssh-obi-server --detach</code> is graceful. The client
 exits with status 0 and does not reconnect.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -539,9 +564,13 @@ session is marked current.</p>
 <p>During automatic reconnect, <code>ssh-obi</code> already knows the session it is trying to
 recover. If that session is still marked busy because the previous broker has
 not fully gone away, the reconnecting client asks the stale attached client to
-detach and then retries the attach. Reconnect retries use capped exponential
-backoff: 125ms, 250ms, 500ms, 1s, then 2s for later attempts, with a maximum of
-10 attempts.</p>
+detach and then retries the attach.</p>
+<p>For an explicit takeover, use:</p>
+<pre><code class="language-sh">ssh-obi --detach-connect user@host
+</code></pre>
+<p>The only existing session is automatic; several sessions produce a selector.
+<code>--session ID</code> chooses the target directly. A transient busy result while the
+old broker clears is handled as recovery rather than a fatal attach error.</p>
 <h2 id="detach"><a class="header" href="#detach">Detach</a></h2>
 <p>Detach means “drop the client, keep the shell”.</p>
 <p>When the network drops, the remote shell keeps running and waits for another
@@ -563,7 +592,11 @@ disconnect, it starts a fresh SSH connection and requests that same session.</p>
 <p>If that reconnect attempt finds the session busy, the client sends a detach
 control request for the same session and retries. Manual first-time attaches
 still report a busy session rather than detaching another client automatically.
-Reconnect retries stop after 10 attempts.</p>
+Reconnect retries continue indefinitely through temporary SSH, DNS, and routing
+failures, using delays of 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most 120s.
+Deadlines count suspend-aware monotonic machine time rather than wall time.
+Normal terminal mode is restored during recovery so OpenSSH can interactively
+request credentials or confirmation.</p>
 <p>The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.
 That is acceptable and expected.</p>
@@ -611,7 +644,7 @@ such as OpenBSD, are intentionally supported through a locally installed
 package, then connect normally; the bootstrap will use a compatible server from
 <code>~/.cargo/bin/ssh-obi-server</code> or from <code>PATH</code>.</p>
 <p>OpenBSD has no prebuilt binaries. On OpenBSD, install a Rust toolchain and run:</p>
-<pre><code class="language-sh">cargo install --features server-bin ssh-obi
+<pre><code class="language-sh">cargo install ssh-obi
 </code></pre>
 <p>Server-capable tarballs:</p>
 <ul>
@@ -653,7 +686,7 @@ for that OS/CPU pair.</p>
 list.</p>
 <p>If the platform can build Rust code, install the server on the remote account
 instead:</p>
-<pre><code class="language-sh">cargo install --features server-bin ssh-obi
+<pre><code class="language-sh">cargo install ssh-obi
 </code></pre>
 <p>The bootstrap probes <code>~/.cargo/bin/ssh-obi-server</code> directly and also accepts a
 compatible <code>ssh-obi-server</code> on <code>PATH</code>, so Cargo-installed and distro-packaged
@@ -703,10 +736,16 @@ little softer than direct SSH on very low-latency links.</p>
 <p>This behavior is a latency/throughput tradeoff, not a correctness issue. It
 does not change the bytes the remote shell receives, introduce in-band escape
 commands, or change reconnect/replay semantics.</p>
-<h2 id="reconnect-eventually-gives-up"><a class="header" href="#reconnect-eventually-gives-up">Reconnect eventually gives up</a></h2>
-<p>Automatic reconnect uses capped exponential backoff: 125ms, 250ms, 500ms, 1s,
-then 2s for later attempts. After 10 failed reconnect attempts, <code>ssh-obi</code>
-reports failure instead of retrying forever.</p>
+<h2 id="reconnect-keeps-retrying"><a class="header" href="#reconnect-keeps-retrying">Reconnect keeps retrying</a></h2>
+<p>Automatic reconnect deliberately continues through temporary SSH transport,
+DNS, and routing failures. Its capped exponential delays are 1s, 2s, 4s, 8s,
+16s, 32s, 64s, then 120s for later attempts. Suspend-aware monotonic machine
+time controls each deadline, so an overdue attempt proceeds promptly after a
+sleeping laptop resumes.</p>
+<p>During recovery, <code>ssh-obi</code> pauses its stdin reader and restores the terminal’s
+normal mode. Passphrase, password, host-key, and proxy prompts from OpenSSH can
+therefore interact normally. Interrupt the client if you no longer want it to
+recover the session.</p>
 <h2 id="a-session-is-busy"><a class="header" href="#a-session-is-busy">A session is busy</a></h2>
 <p>A session can have only one attached client. If another client is already
 attached, a second attach attempt gets <code>SessionBusy</code>.</p>
@@ -720,6 +759,9 @@ detach and then retries. Manual attaches still leave the busy session alone.</p>
 <pre><code class="language-sh">ssh-obi --detach --session ID user@example.com
 </code></pre>
 <p>to ask the session to detach the attached client for a known session.</p>
+<p>To detach and immediately connect yourself, use:</p>
+<pre><code class="language-sh">ssh-obi --detach-connect user@example.com
+</code></pre>
 <h2 id="motd-is-shown-when-a-session-starts"><a class="header" href="#motd-is-shown-when-a-session-starts">MOTD is shown when a session starts</a></h2>
 <p>New sessions print the remote host MOTD before the shell starts. This includes
 readable non-empty <code>/run/motd.dynamic</code> and <code>/etc/motd</code> files, plus readable
@@ -742,15 +784,40 @@ so the client reconnects.</p>
 running it in an allowed shell.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="changelog"><a class="header" href="#changelog">Changelog</a></h1>
+<h2 id="v020"><a class="header" href="#v020">v0.2.0</a></h2>
+<p>The wire-protocol baseline remains <code>0.1</code>.</p>
+<h3 id="added"><a class="header" href="#added">Added</a></h3>
+<ul>
+<li><code>--detach-connect</code> selects and takes over an existing session. <code>--session ID</code>
+overrides automatic selection.</li>
+<li><code>--obi-version</code> reports the package version from the client and server.</li>
+<li>Remote bootstrap compares the server package version with the local client’s
+compiled version. Missing support or an older server enters the install path.</li>
+</ul>
+<h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
+<ul>
+<li>Reconnection retries temporary SSH, DNS, and routing failures indefinitely,
+with capped exponential delays from 1s through 120s.</li>
+<li>Retry deadlines use suspend-aware monotonic machine time, and the terminal is
+restored for interactive OpenSSH prompts during recovery.</li>
+<li><code>server-bin</code> is enabled by default, so <code>cargo install ssh-obi</code> installs the
+remote server on OpenBSD without extra feature flags.</li>
+</ul>
+<h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
+<ul>
+<li>Login shells inherit the launching process’s umask rather than being forced
+to umask <code>0000</code>. Daemon sockets retain explicit owner-only permissions inside
+their private per-user directory.</li>
+</ul>
 <h2 id="v013"><a class="header" href="#v013">v0.1.3</a></h2>
 <p>Released for the <code>0.1.x</code> protocol line.</p>
-<h3 id="added"><a class="header" href="#added">Added</a></h3>
+<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
 <ul>
 <li>New sessions print the remote host MOTD before the shell starts, using
 <code>/run/motd.dynamic</code>, <code>/etc/motd</code>, and readable non-empty files under
 <code>/etc/motd.d/</code>. A user <code>~/.hushlogin</code> suppresses this MOTD output.</li>
 </ul>
-<h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
+<h3 id="changed-1"><a class="header" href="#changed-1">Changed</a></h3>
 <ul>
 <li>Automatic reconnect retries now use a small capped exponential backoff:
 125ms, 250ms, 500ms, 1s, then 2s, with a maximum of 10 attempts.</li>
@@ -761,7 +828,7 @@ running it in an allowed shell.</p>
 </ul>
 <h2 id="v012"><a class="header" href="#v012">v0.1.2</a></h2>
 <p>Released for the <code>0.1.x</code> protocol line.</p>
-<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
+<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
 <ul>
 <li>On Linux systems booted with systemd and a user bus, newly spawned PTY
 children are moved into a transient user scope before exec. This follows the
@@ -777,7 +844,7 @@ a Rust toolchain and run <code>cargo install --features server-bin ssh-obi</code
 the server host, including busy sessions and a marker for the current session
 when run inside an <code>ssh-obi</code> session.</li>
 </ul>
-<h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
+<h3 id="fixed-1"><a class="header" href="#fixed-1">Fixed</a></h3>
 <ul>
 <li>OpenBSD install-only bootstrap runs now complete successfully when a
 compatible <code>ssh-obi-server</code> already exists at
@@ -791,7 +858,7 @@ systemd tooling.</li>
 </ul>
 <h2 id="v011"><a class="header" href="#v011">v0.1.1</a></h2>
 <p>Released for the <code>0.1.x</code> protocol line.</p>
-<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
+<h3 id="added-3"><a class="header" href="#added-3">Added</a></h3>
 <ul>
 <li>The client sends an initial terminal window size before attach and new-session
 requests when the remote server supports <code>initial-window-size.v1</code>.</li>
@@ -813,7 +880,7 @@ package.</li>
 </ul>
 <h2 id="v010"><a class="header" href="#v010">v0.1.0</a></h2>
 <p>Initial public release.</p>
-<h3 id="added-3"><a class="header" href="#added-3">Added</a></h3>
+<h3 id="added-4"><a class="header" href="#added-4">Added</a></h3>
 <ul>
 <li>Local <code>ssh-obi</code> client and Unix remote <code>ssh-obi-server</code>.</li>
 <li>Per-user long-lived remote sessions.</li>
@@ -829,16 +896,16 @@ package.</li>
 is intentionally user-facing.</p>
 <h2 id="repository-commands"><a class="header" href="#repository-commands">Repository Commands</a></h2>
 <p>Build the client:</p>
-<pre><code class="language-sh">cargo build --release
+<pre><code class="language-sh">cargo build --release --no-default-features --bin ssh-obi
 </code></pre>
 <p>Build both client and server:</p>
-<pre><code class="language-sh">cargo build --release --features server-bin --bins
+<pre><code class="language-sh">cargo build --release --bins
 </code></pre>
 <p>Run tests:</p>
-<pre><code class="language-sh">cargo test --features server-bin
+<pre><code class="language-sh">cargo test --all-targets
 </code></pre>
 <p>Run clippy:</p>
-<pre><code class="language-sh">cargo clippy --all-targets --features server-bin -- -D warnings
+<pre><code class="language-sh">cargo clippy --all-targets -- -D warnings
 </code></pre>
 <p>Format:</p>
 <pre><code class="language-sh">cargo fmt --all
@@ -859,9 +926,9 @@ Pages after each build:</p>
 <li>release tarballs found in known release output locations</li>
 </ul>
 <h2 id="release-builds"><a class="header" href="#release-builds">Release Builds</a></h2>
-<p>The current release is <code>v0.1.3</code>. It is published to crates.io and tagged on
-GitHub as <code>v0.1.3</code>. Release tarballs for the bootstrap installers are served
-from <code>https://obi.menhera.org/</code>.</p>
+<p>The crate version is <code>v0.2.0</code>. The wire-protocol baseline remains <code>0.1</code>.
+Release tarballs for the bootstrap installers are served from
+<code>https://obi.menhera.org/</code>.</p>
 <p>Use:</p>
 <pre><code class="language-sh">./build-release.sh
 </code></pre>

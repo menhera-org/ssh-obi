@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-61b04a7d.js";
+            window.path_to_searchindex_js = "searchindex-6c165253.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -179,16 +179,16 @@
 is intentionally user-facing.</p>
 <h2 id="repository-commands"><a class="header" href="#repository-commands">Repository Commands</a></h2>
 <p>Build the client:</p>
-<pre><code class="language-sh">cargo build --release
+<pre><code class="language-sh">cargo build --release --no-default-features --bin ssh-obi
 </code></pre>
 <p>Build both client and server:</p>
-<pre><code class="language-sh">cargo build --release --features server-bin --bins
+<pre><code class="language-sh">cargo build --release --bins
 </code></pre>
 <p>Run tests:</p>
-<pre><code class="language-sh">cargo test --features server-bin
+<pre><code class="language-sh">cargo test --all-targets
 </code></pre>
 <p>Run clippy:</p>
-<pre><code class="language-sh">cargo clippy --all-targets --features server-bin -- -D warnings
+<pre><code class="language-sh">cargo clippy --all-targets -- -D warnings
 </code></pre>
 <p>Format:</p>
 <pre><code class="language-sh">cargo fmt --all
@@ -209,9 +209,9 @@ Pages after each build:</p>
 <li>release tarballs found in known release output locations</li>
 </ul>
 <h2 id="release-builds"><a class="header" href="#release-builds">Release Builds</a></h2>
-<p>The current release is <code>v0.1.3</code>. It is published to crates.io and tagged on
-GitHub as <code>v0.1.3</code>. Release tarballs for the bootstrap installers are served
-from <code>https://obi.menhera.org/</code>.</p>
+<p>The crate version is <code>v0.2.0</code>. The wire-protocol baseline remains <code>0.1</code>.
+Release tarballs for the bootstrap installers are served from
+<code>https://obi.menhera.org/</code>.</p>
 <p>Use:</p>
 <pre><code class="language-sh">./build-release.sh
 </code></pre>

@@ -2,6 +2,7 @@
 set -eu
 
 want="0.1"
+want_version=""
 install_only=0
 term="${TERM:-xterm-256color}"
 
@@ -17,6 +18,11 @@ fi
 if [ "$#" -gt 0 ]; then
     want="$1"
     shift
+fi
+
+if [ "$#" -gt 1 ] && [ "$1" = "--client-version" ]; then
+    want_version="$2"
+    shift 2
 fi
 
 if [ "$#" -gt 0 ] && [ "$1" = "--install" ]; then
@@ -41,10 +47,51 @@ managed_server="${bin_dir}/ssh-obi-server"
 cargo_server="${HOME}/.cargo/bin/ssh-obi-server"
 base_url="https://obi.menhera.org"
 
+version_at_least() (
+    have="$1"
+    need="$2"
+
+    case "$have" in
+        "" | *[!0-9.]*) exit 1 ;;
+    esac
+    case "$need" in
+        "" | *[!0-9.]*) exit 1 ;;
+    esac
+
+    IFS=.
+    set -- $have
+    [ "$#" -eq 3 ] || exit 1
+    have_major="$1"
+    have_minor="$2"
+    have_patch="$3"
+
+    set -- $need
+    [ "$#" -eq 3 ] || exit 1
+    need_major="$1"
+    need_minor="$2"
+    need_patch="$3"
+
+    [ "$have_major" -gt "$need_major" ] && exit 0
+    [ "$have_major" -lt "$need_major" ] && exit 1
+    [ "$have_minor" -gt "$need_minor" ] && exit 0
+    [ "$have_minor" -lt "$need_minor" ] && exit 1
+    [ "$have_patch" -ge "$need_patch" ]
+)
+
+server_is_usable() {
+    candidate="$1"
+    [ "$candidate" != "" ] || return 1
+    [ -x "$candidate" ] || return 1
+    "$candidate" --protocol-check "$want" >/dev/null 2>&1 || return 1
+    [ "$want_version" != "" ] || return 0
+    candidate_version="$("$candidate" --obi-version 2>/dev/null)" || return 1
+    version_at_least "$candidate_version" "$want_version"
+}
+
 find_usable_server() {
     path_server="$(command -v ssh-obi-server 2>/dev/null || true)"
     for candidate in "$managed_server" "$cargo_server" "$path_server"; do
-        if [ "$candidate" != "" ] && [ -x "$candidate" ] && "$candidate" --protocol-check "$want" >/dev/null 2>&1; then
+        if server_is_usable "$candidate"; then
             printf '%s\n' "$candidate"
             return 0
         fi
@@ -82,7 +129,7 @@ case "${system}:${machine}" in
             printf '%s\n' 'OBI-SERVER-READY'
             exec "$server" "$@"
         fi
-        printf '%s\n' 'OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries. Install a Rust toolchain on the remote host, then run: cargo install --features server-bin ssh-obi'
+        printf '%s\n' 'OBI-ERROR OpenBSD has no prebuilt ssh-obi binaries. Install a Rust toolchain on the remote host, then run: cargo install ssh-obi'
         exit 1
         ;;
     Linux:x86_64 | Linux:amd64)
@@ -188,7 +235,7 @@ if ! grep -F "$fish_line" "$fish_file" >/dev/null 2>&1; then
 fi
 
 server="$managed_server"
-if "$server" --protocol-check "$want" >/dev/null 2>&1; then
+if server_is_usable "$server"; then
     if [ "$install_only" -eq 1 ]; then
         printf '%s\n' 'OBI-INSTALL-COMPLETE'
         exit 0
@@ -197,5 +244,5 @@ if "$server" --protocol-check "$want" >/dev/null 2>&1; then
     exec "$server" "$@"
 fi
 
-printf '%s\n' 'OBI-ERROR installed server failed protocol check'
+printf '%s\n' 'OBI-ERROR installed server failed version or protocol check'
 exit 1

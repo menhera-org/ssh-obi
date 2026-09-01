@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.2.0
+
+The wire-protocol baseline remains `0.1`.
+
+### Added
+
+- `--detach-connect` selects and takes over an existing session. `--session ID`
+  overrides automatic selection.
+- `--obi-version` reports the package version from the client and server.
+- Remote bootstrap compares the server package version with the local client's
+  compiled version. Missing support or an older server enters the install path.
+
+### Changed
+
+- Reconnection retries temporary SSH, DNS, and routing failures indefinitely,
+  with capped exponential delays from 1s through 120s.
+- Retry deadlines use suspend-aware monotonic machine time, and the terminal is
+  restored for interactive OpenSSH prompts during recovery.
+- `server-bin` is enabled by default, so `cargo install ssh-obi` installs the
+  remote server on OpenBSD without extra feature flags.
+
+### Fixed
+
+- Login shells inherit the launching process's umask rather than being forced
+  to umask `0000`. Daemon sockets retain explicit owner-only permissions inside
+  their private per-user directory.
+
 ## v0.1.3
 
 Released for the `0.1.x` protocol line.

@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `--detach-connect` takes over the only existing session, or prompts when
+  several exist. `--session ID` selects the takeover target explicitly.
+- `--obi-version` reports the package version from both the client and server.
+  Remote bootstrap now uses the local client's compiled version to replace
+  servers that lack this option or report an older version.
+
+### Changed
+
+- Automatic reconnect now retries SSH transport failures indefinitely, including
+  temporary DNS and routing failures, with a slower 1s-to-120s capped exponential
+  backoff. Deadlines use suspend-aware monotonic machine time, so wall-clock
+  changes do not affect retries and overdue attempts continue promptly after
+  laptop resume.
+- During reconnect and stale-client cleanup, the session stdin reader pauses and
+  the local terminal returns to its normal mode so OpenSSH authentication and
+  host-key prompts can interact with the user safely.
+- The crate version is now `0.2.0`. The wire-protocol baseline remains `0.1`.
+- The `server-bin` feature is enabled by default so `cargo install ssh-obi`
+  installs `ssh-obi-server`, including on OpenBSD where no prebuilt archive is
+  available.
+
+### Fixed
+
+- Remote login shells now inherit the launching process's umask instead of being
+  forced to umask `0000` during daemonization. Daemon sockets are explicitly
+  owner-only (`0600`) inside their validated `0700` per-user directory, so they
+  do not depend on the old process-wide umask behavior.
+
 ## v0.1.3
 
 Released for the `0.1.x` protocol line.

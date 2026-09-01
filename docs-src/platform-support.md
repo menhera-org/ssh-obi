@@ -49,7 +49,7 @@ package, then connect normally; the bootstrap will use a compatible server from
 OpenBSD has no prebuilt binaries. On OpenBSD, install a Rust toolchain and run:
 
 ```sh
-cargo install --features server-bin ssh-obi
+cargo install ssh-obi
 ```
 
 Server-capable tarballs:

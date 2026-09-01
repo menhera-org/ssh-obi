@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-61b04a7d.js";
+            window.path_to_searchindex_js = "searchindex-6c165253.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -186,7 +186,7 @@ for that OS/CPU pair.</p>
 list.</p>
 <p>If the platform can build Rust code, install the server on the remote account
 instead:</p>
-<pre><code class="language-sh">cargo install --features server-bin ssh-obi
+<pre><code class="language-sh">cargo install ssh-obi
 </code></pre>
 <p>The bootstrap probes <code>~/.cargo/bin/ssh-obi-server</code> directly and also accepts a
 compatible <code>ssh-obi-server</code> on <code>PATH</code>, so Cargo-installed and distro-packaged
@@ -236,10 +236,16 @@ little softer than direct SSH on very low-latency links.</p>
 <p>This behavior is a latency/throughput tradeoff, not a correctness issue. It
 does not change the bytes the remote shell receives, introduce in-band escape
 commands, or change reconnect/replay semantics.</p>
-<h2 id="reconnect-eventually-gives-up"><a class="header" href="#reconnect-eventually-gives-up">Reconnect eventually gives up</a></h2>
-<p>Automatic reconnect uses capped exponential backoff: 125ms, 250ms, 500ms, 1s,
-then 2s for later attempts. After 10 failed reconnect attempts, <code>ssh-obi</code>
-reports failure instead of retrying forever.</p>
+<h2 id="reconnect-keeps-retrying"><a class="header" href="#reconnect-keeps-retrying">Reconnect keeps retrying</a></h2>
+<p>Automatic reconnect deliberately continues through temporary SSH transport,
+DNS, and routing failures. Its capped exponential delays are 1s, 2s, 4s, 8s,
+16s, 32s, 64s, then 120s for later attempts. Suspend-aware monotonic machine
+time controls each deadline, so an overdue attempt proceeds promptly after a
+sleeping laptop resumes.</p>
+<p>During recovery, <code>ssh-obi</code> pauses its stdin reader and restores the terminal’s
+normal mode. Passphrase, password, host-key, and proxy prompts from OpenSSH can
+therefore interact normally. Interrupt the client if you no longer want it to
+recover the session.</p>
 <h2 id="a-session-is-busy"><a class="header" href="#a-session-is-busy">A session is busy</a></h2>
 <p>A session can have only one attached client. If another client is already
 attached, a second attach attempt gets <code>SessionBusy</code>.</p>
@@ -253,6 +259,9 @@ detach and then retries. Manual attaches still leave the busy session alone.</p>
 <pre><code class="language-sh">ssh-obi --detach --session ID user@example.com
 </code></pre>
 <p>to ask the session to detach the attached client for a known session.</p>
+<p>To detach and immediately connect yourself, use:</p>
+<pre><code class="language-sh">ssh-obi --detach-connect user@example.com
+</code></pre>
 <h2 id="motd-is-shown-when-a-session-starts"><a class="header" href="#motd-is-shown-when-a-session-starts">MOTD is shown when a session starts</a></h2>
 <p>New sessions print the remote host MOTD before the shell starts. This includes
 readable non-empty <code>/run/motd.dynamic</code> and <code>/etc/motd</code> files, plus readable

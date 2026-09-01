@@ -15,6 +15,8 @@ pub enum ClientAction {
     New,
     List,
     Detach,
+    DetachConnect,
+    Version,
 }
 
 impl ClientArgs {
@@ -72,6 +74,16 @@ where
             continue;
         }
 
+        if arg == "--detach-connect" {
+            set_action(&mut action, ClientAction::DetachConnect)?;
+            continue;
+        }
+
+        if arg == "--obi-version" {
+            set_action(&mut action, ClientAction::Version)?;
+            continue;
+        }
+
         if arg == "--session" {
             let Some(value) = iter.next() else {
                 return Err(CliError::MissingOptionValue("--session"));
@@ -106,6 +118,18 @@ where
         }
 
         destination = Some(arg);
+    }
+
+    if action == ClientAction::Version {
+        if destination.is_some() || session.is_some() || !ssh_args.is_empty() {
+            return Err(CliError::VersionTakesNoArguments);
+        }
+        return Ok(ClientArgs {
+            action,
+            session: None,
+            ssh_args: Vec::new(),
+            destination: OsString::new(),
+        });
     }
 
     let destination = destination.ok_or(CliError::MissingDestination)?;
@@ -239,6 +263,7 @@ pub enum CliError {
     ConflictingActions,
     DetachRequiresSession,
     RemoteCommandNotSupported,
+    VersionTakesNoArguments,
 }
 
 impl fmt::Display for CliError {
@@ -248,11 +273,15 @@ impl fmt::Display for CliError {
             Self::MissingOptionValue(option) => write!(f, "missing value for {option}"),
             Self::NonUtf8OptionValue(option) => write!(f, "non-UTF-8 value for {option}"),
             Self::UnsupportedOption(option) => write!(f, "unsupported option: {option}"),
-            Self::ConflictingActions => write!(f, "choose only one of --new, --list, or --detach"),
+            Self::ConflictingActions => write!(
+                f,
+                "choose only one of --new, --list, --detach, --detach-connect, or --obi-version"
+            ),
             Self::DetachRequiresSession => write!(f, "--detach requires --session ID"),
             Self::RemoteCommandNotSupported => {
                 write!(f, "remote command arguments are not supported")
             }
+            Self::VersionTakesNoArguments => write!(f, "--obi-version takes no arguments"),
         }
     }
 }
@@ -276,6 +305,30 @@ mod tests {
     fn detach_requires_session() {
         let err = parse_client_args(["--detach", "host"]).unwrap_err();
         assert_eq!(err, CliError::DetachRequiresSession);
+    }
+
+    #[test]
+    fn detach_connect_allows_optional_session_override() {
+        let selected =
+            parse_client_args(["--detach-connect", "--session", "aaaaaaaa", "host"]).unwrap();
+        assert_eq!(selected.action, ClientAction::DetachConnect);
+        assert_eq!(selected.session.as_deref(), Some("aaaaaaaa"));
+
+        let automatic = parse_client_args(["--detach-connect", "host"]).unwrap();
+        assert_eq!(automatic.action, ClientAction::DetachConnect);
+        assert!(automatic.session.is_none());
+    }
+
+    #[test]
+    fn obi_version_does_not_require_a_destination() {
+        let parsed = parse_client_args(["--obi-version"]).unwrap();
+        assert_eq!(parsed.action, ClientAction::Version);
+        assert!(parsed.destination.is_empty());
+
+        assert_eq!(
+            parse_client_args(["--obi-version", "host"]).unwrap_err(),
+            CliError::VersionTakesNoArguments
+        );
     }
 
     #[test]

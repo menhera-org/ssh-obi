@@ -15,11 +15,13 @@ The client starts the system `ssh` binary and prepares the remote side over the
 same SSH connection. If a compatible server component is already installed, the
 session starts immediately.
 
-If a compatible server is already installed at `~/.ssh-obi/bin`, at
-`~/.cargo/bin`, or on the remote `PATH`, `ssh-obi` uses it. If the server
-component is missing or incompatible and a prebuilt tarball exists for the
-remote platform, `ssh-obi` asks before installing it into `~/.ssh-obi/bin` on
-the remote account. No root access is needed for the built-in install path.
+If a compatible, sufficiently recent server is already installed at
+`~/.ssh-obi/bin`, at `~/.cargo/bin`, or on the remote `PATH`, `ssh-obi` uses it.
+The bootstrap checks protocol compatibility and compares the server's
+`--obi-version` output with the local client's compiled version. A missing
+version option or an older server enters the install path. If a prebuilt
+tarball exists for the remote platform, `ssh-obi` asks before installing it
+into `~/.ssh-obi/bin` on the remote account. No root access is needed.
 
 After installation, `ssh-obi` attaches to a new or existing session.
 
@@ -51,6 +53,10 @@ Select a session to attach:
 Busy sessions are shown by `--list`, but they are not selectable in the
 interactive picker.
 
+To take over an existing session, use `ssh-obi --detach-connect user@host`.
+The only session is selected automatically; multiple sessions produce a picker
+that includes both free and busy sessions. `--session ID` overrides selection.
+
 ## Detach Without Killing The Shell
 
 From inside the remote shell:
@@ -74,9 +80,14 @@ client reconnects and asks for the same session.
 If the old broker is still attached when reconnect starts, the reconnecting
 client asks that stale client to detach and then retries the attach.
 
-Reconnect retries use short exponential backoff delays: 125ms, 250ms, 500ms,
-1s, then 2s for later attempts. The client gives up after 10 reconnect
-attempts.
+Reconnect retries continue indefinitely through temporary SSH, DNS, and routing
+failures. Delays are 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most 120s. The
+deadline uses suspend-aware monotonic machine time, so wall-clock changes do not
+affect it and an overdue attempt continues promptly after laptop resume.
+
+While recovering, the client restores normal terminal mode and pauses its stdin
+reader. OpenSSH can therefore ask for key passphrases, passwords, host-key
+confirmation, and proxy authentication on subsequent connections.
 
 On reattach, recent output is replayed first, then live forwarding resumes. The
 replay buffer is bounded, so old history belongs in your local terminal

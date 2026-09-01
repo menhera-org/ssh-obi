@@ -21,13 +21,9 @@ panes, tabs, or in-band escape commands. If you want window management, run
 
 ## Status
 
-`ssh-obi` `v0.1.3` is the current release. It is available on crates.io,
-tagged as `v0.1.3` on GitHub, and distributed as release tarballs from
-`https://obi.menhera.org/`.
-
-The `v0.1.3` release adds MOTD printing before new session shells start and
-caps automatic reconnect retries with a small exponential backoff. The `0.1`
-wire protocol baseline remains unchanged.
+The crate version is `v0.2.0`. It adds durable interactive reconnection,
+session takeover, version-aware remote bootstrap, and correct login-shell umask
+inheritance. The `0.1` wire-protocol baseline remains compatible.
 
 The documentation on this site is the user-facing source for the published
 bootstrap scripts, release tarballs, install flow, and supported platforms.
@@ -63,6 +59,21 @@ machine:
 
 ```sh
 ssh-obi --detach --session abc123 user@example.com
+```
+
+Detach an existing client and connect to that session yourself:
+
+```sh
+ssh-obi --detach-connect user@example.com
+```
+
+With exactly one session it is selected automatically. With several sessions,
+the client shows a selector. Add `--session abc123` to choose explicitly.
+
+Print the installed crate version:
+
+```sh
+ssh-obi --obi-version
 ```
 
 Or detach from inside the remote shell without killing it:

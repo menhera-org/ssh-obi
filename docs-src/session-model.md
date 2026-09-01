@@ -50,9 +50,17 @@ session is marked current.
 During automatic reconnect, `ssh-obi` already knows the session it is trying to
 recover. If that session is still marked busy because the previous broker has
 not fully gone away, the reconnecting client asks the stale attached client to
-detach and then retries the attach. Reconnect retries use capped exponential
-backoff: 125ms, 250ms, 500ms, 1s, then 2s for later attempts, with a maximum of
-10 attempts.
+detach and then retries the attach.
+
+For an explicit takeover, use:
+
+```sh
+ssh-obi --detach-connect user@host
+```
+
+The only existing session is automatic; several sessions produce a selector.
+`--session ID` chooses the target directly. A transient busy result while the
+old broker clears is handled as recovery rather than a fatal attach error.
 
 ## Detach
 
@@ -89,7 +97,11 @@ disconnect, it starts a fresh SSH connection and requests that same session.
 If that reconnect attempt finds the session busy, the client sends a detach
 control request for the same session and retries. Manual first-time attaches
 still report a busy session rather than detaching another client automatically.
-Reconnect retries stop after 10 attempts.
+Reconnect retries continue indefinitely through temporary SSH, DNS, and routing
+failures, using delays of 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most 120s.
+Deadlines count suspend-aware monotonic machine time rather than wall time.
+Normal terminal mode is restored during recovery so OpenSSH can interactively
+request credentials or confirmation.
 
 The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.

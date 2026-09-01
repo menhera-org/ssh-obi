@@ -444,6 +444,13 @@ pub enum AutoSelection {
     Prompt,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExistingSelection {
+    None,
+    Attach(SessionId),
+    Prompt,
+}
+
 pub fn auto_select(sessions: &[SessionInfo]) -> AutoSelection {
     let mut free = sessions.iter().filter(|session| session.is_selectable());
     let Some(first) = free.next() else {
@@ -454,6 +461,14 @@ pub fn auto_select(sessions: &[SessionInfo]) -> AutoSelection {
         AutoSelection::Prompt
     } else {
         AutoSelection::Attach(first.id.clone())
+    }
+}
+
+pub fn auto_select_existing(sessions: &[SessionInfo]) -> ExistingSelection {
+    match sessions {
+        [] => ExistingSelection::None,
+        [session] => ExistingSelection::Attach(session.id.clone()),
+        _ => ExistingSelection::Prompt,
     }
 }
 
@@ -497,7 +512,29 @@ pub fn picker_rows(sessions: &[SessionInfo]) -> Vec<PickerRow> {
 }
 
 pub fn render_session_table(sessions: &[SessionInfo], include_new: bool) -> String {
-    let rows = picker_rows(sessions);
+    render_picker_table(picker_rows(sessions), include_new)
+}
+
+pub fn render_detach_connect_table(sessions: &[SessionInfo]) -> String {
+    let rows = sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| PickerRow {
+            selector: Some(index + 1),
+            session_id: session.id.clone(),
+            init_time: display_time(session.init_time),
+            detach_time: session
+                .last_detach_time
+                .map(display_time)
+                .unwrap_or_else(|| "-".to_string()),
+            state: session.state,
+            current_command: session.current_command.clone(),
+        })
+        .collect();
+    render_picker_table(rows, false)
+}
+
+fn render_picker_table(rows: Vec<PickerRow>, include_new: bool) -> String {
     let mut output = String::new();
     output.push_str("  #   STATE  INIT              DETACH            WHAT\n");
 
@@ -601,6 +638,24 @@ mod tests {
     }
 
     #[test]
+    fn existing_selection_includes_busy_sessions() {
+        let busy = session("aaaaaaaa", SessionState::Busy);
+        assert_eq!(
+            auto_select_existing(std::slice::from_ref(&busy)),
+            ExistingSelection::Attach(busy.id)
+        );
+
+        assert_eq!(
+            auto_select_existing(&[
+                session("aaaaaaaa", SessionState::Busy),
+                session("bbbbbbbb", SessionState::Free),
+            ]),
+            ExistingSelection::Prompt
+        );
+        assert_eq!(auto_select_existing(&[]), ExistingSelection::None);
+    }
+
+    #[test]
     fn picker_numbers_only_free_sessions() {
         let rows = picker_rows(&[
             session("aaaaaaaa", SessionState::Busy),
@@ -627,6 +682,18 @@ mod tests {
         assert!(table.contains("  -   busy"));
         assert!(table.contains("  1   free"));
         assert!(table.contains("  n   new"));
+    }
+
+    #[test]
+    fn detach_connect_table_numbers_busy_and_free_sessions() {
+        let table = render_detach_connect_table(&[
+            session("aaaaaaaa", SessionState::Busy),
+            session("bbbbbbbb", SessionState::Free),
+        ]);
+
+        assert!(table.contains("  1   busy"));
+        assert!(table.contains("  2   free"));
+        assert!(!table.contains("  n   new"));
     }
 
     #[test]

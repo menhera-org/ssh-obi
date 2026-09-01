@@ -18,7 +18,7 @@ If the platform can build Rust code, install the server on the remote account
 instead:
 
 ```sh
-cargo install --features server-bin ssh-obi
+cargo install ssh-obi
 ```
 
 The bootstrap probes `~/.cargo/bin/ssh-obi-server` directly and also accepts a
@@ -93,11 +93,18 @@ This behavior is a latency/throughput tradeoff, not a correctness issue. It
 does not change the bytes the remote shell receives, introduce in-band escape
 commands, or change reconnect/replay semantics.
 
-## Reconnect eventually gives up
+## Reconnect keeps retrying
 
-Automatic reconnect uses capped exponential backoff: 125ms, 250ms, 500ms, 1s,
-then 2s for later attempts. After 10 failed reconnect attempts, `ssh-obi`
-reports failure instead of retrying forever.
+Automatic reconnect deliberately continues through temporary SSH transport,
+DNS, and routing failures. Its capped exponential delays are 1s, 2s, 4s, 8s,
+16s, 32s, 64s, then 120s for later attempts. Suspend-aware monotonic machine
+time controls each deadline, so an overdue attempt proceeds promptly after a
+sleeping laptop resumes.
+
+During recovery, `ssh-obi` pauses its stdin reader and restores the terminal's
+normal mode. Passphrase, password, host-key, and proxy prompts from OpenSSH can
+therefore interact normally. Interrupt the client if you no longer want it to
+recover the session.
 
 ## A session is busy
 
@@ -121,6 +128,12 @@ ssh-obi --detach --session ID user@example.com
 ```
 
 to ask the session to detach the attached client for a known session.
+
+To detach and immediately connect yourself, use:
+
+```sh
+ssh-obi --detach-connect user@example.com
+```
 
 ## MOTD is shown when a session starts
 

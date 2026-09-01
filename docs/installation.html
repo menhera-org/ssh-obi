@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-61b04a7d.js";
+            window.path_to_searchindex_js = "searchindex-6c165253.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -186,18 +186,15 @@ HTTPS.</p>
 <p>If you already have a Rust toolchain, install the local client with:</p>
 <pre><code class="language-sh">cargo install ssh-obi
 </code></pre>
-<p>This installs the client binary, <code>ssh-obi</code>. It does not install the remote
-server binary by default. For normal use, let the client bootstrap or update
-the remote server component when you connect.</p>
-<p>For remote platforms where no prebuilt server tarball is published, install a
-server-capable build in the remote account with:</p>
-<pre><code class="language-sh">cargo install --features server-bin ssh-obi
-</code></pre>
+<p>On Unix-like systems this installs both <code>ssh-obi</code> and <code>ssh-obi-server</code>; the
+<code>server-bin</code> feature is enabled by default. A client-only source build can use
+<code>--no-default-features --bin ssh-obi</code>. For normal use, the client can still
+bootstrap or update the remote server component when you connect.</p>
 <p>The attach bootstrap checks <code>~/.cargo/bin/ssh-obi-server</code> directly, so this
 works even when that directory is not on <code>PATH</code>.</p>
 <p>OpenBSD does not have prebuilt <code>ssh-obi</code> release tarballs. On OpenBSD remote
 hosts, install a Rust toolchain first, then run:</p>
-<pre><code class="language-sh">cargo install --features server-bin ssh-obi
+<pre><code class="language-sh">cargo install ssh-obi
 </code></pre>
 <p>After that, connect normally; the bootstrap will find the Cargo-installed
 <code>ssh-obi-server</code>.</p>
@@ -232,8 +229,9 @@ not add duplicate <code>ssh-obi</code> PATH entries to shell startup files.</p>
 handles the remote check during normal connection:</p>
 <pre><code class="language-sh">ssh-obi user@example.com
 </code></pre>
-<p>If the remote server component is missing or incompatible, the local client asks
-for confirmation and installs it into that remote account.</p>
+<p>If the remote server component is missing, lacks <code>--obi-version</code>, reports an
+older package version than the local client, or has an incompatible protocol,
+the local client asks for confirmation and installs it into that remote account.</p>
 <p>During normal attach, the bootstrap probes for an existing compatible server in
 this order:</p>
 <ol>
@@ -242,7 +240,7 @@ this order:</p>
 <li><code>ssh-obi-server</code> found on <code>PATH</code></li>
 </ol>
 <p>The <code>PATH</code> probe supports distro-packaged installs. The direct Cargo path
-supports remote platforms where <code>cargo install --features server-bin ssh-obi</code>
+supports remote platforms where <code>cargo install ssh-obi</code>
 is the practical server install path.</p>
 <h2 id="windows-client-install"><a class="header" href="#windows-client-install">Windows Client Install</a></h2>
 <p>Windows can run the client only. It cannot run the remote server.</p>

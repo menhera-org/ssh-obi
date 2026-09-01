@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-61b04a7d.js";
+            window.path_to_searchindex_js = "searchindex-6c165253.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-08fdb426.js"></script>
@@ -210,9 +210,13 @@ session is marked current.</p>
 <p>During automatic reconnect, <code>ssh-obi</code> already knows the session it is trying to
 recover. If that session is still marked busy because the previous broker has
 not fully gone away, the reconnecting client asks the stale attached client to
-detach and then retries the attach. Reconnect retries use capped exponential
-backoff: 125ms, 250ms, 500ms, 1s, then 2s for later attempts, with a maximum of
-10 attempts.</p>
+detach and then retries the attach.</p>
+<p>For an explicit takeover, use:</p>
+<pre><code class="language-sh">ssh-obi --detach-connect user@host
+</code></pre>
+<p>The only existing session is automatic; several sessions produce a selector.
+<code>--session ID</code> chooses the target directly. A transient busy result while the
+old broker clears is handled as recovery rather than a fatal attach error.</p>
 <h2 id="detach"><a class="header" href="#detach">Detach</a></h2>
 <p>Detach means “drop the client, keep the shell”.</p>
 <p>When the network drops, the remote shell keeps running and waits for another
@@ -234,7 +238,11 @@ disconnect, it starts a fresh SSH connection and requests that same session.</p>
 <p>If that reconnect attempt finds the session busy, the client sends a detach
 control request for the same session and retries. Manual first-time attaches
 still report a busy session rather than detaching another client automatically.
-Reconnect retries stop after 10 attempts.</p>
+Reconnect retries continue indefinitely through temporary SSH, DNS, and routing
+failures, using delays of 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most 120s.
+Deadlines count suspend-aware monotonic machine time rather than wall time.
+Normal terminal mode is restored during recovery so OpenSSH can interactively
+request credentials or confirmation.</p>
 <p>The session sends recent output, then resumes live forwarding. This can
 duplicate bytes the local terminal already displayed before the disconnect.
 That is acceptable and expected.</p>

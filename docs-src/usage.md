@@ -38,6 +38,22 @@ Detach the attached client for a specific session and exit:
 ssh-obi --detach --session abc123 user@example.com
 ```
 
+Detach an existing client and connect to that session:
+
+```sh
+ssh-obi --detach-connect user@example.com
+```
+
+The only session is selected automatically. If several sessions exist, a
+selector includes both busy and free sessions. `--session abc123` overrides
+selection.
+
+Print the client package version and exit:
+
+```sh
+ssh-obi --obi-version
+```
+
 Detach from inside the remote shell:
 
 ```sh
@@ -114,8 +130,12 @@ reports an attached client, `ssh-obi` sends a detach request for that same
 session and retries the attach. Normal first-time attach attempts do not detach
 busy sessions automatically.
 
-Reconnect retries use 125ms, 250ms, 500ms, 1s, and then capped 2s delays. The
-client gives up after 10 attempts.
+Reconnect retries continue indefinitely through temporary SSH transport, DNS,
+and routing failures. Delays are 1s, 2s, 4s, 8s, 16s, 32s, 64s, then at most
+120s. Suspend-aware monotonic machine time controls the deadline, so changing
+the wall clock has no effect and overdue attempts continue promptly after
+laptop resume. During recovery the client pauses its stdin reader and restores
+normal terminal mode, allowing OpenSSH prompts to interact with the user.
 
 A deliberate detach through `ssh-obi-server --detach` is graceful. The client
 exits with status 0 and does not reconnect.

@@ -162,7 +162,7 @@ run_xwin_client() {
         fi
     fi
 
-    AR_x86_64_pc_windows_msvc="$llvm_lib" "$xwin_bin" build --target-dir "$cargo_target_dir" --release --target "$target" --bin ssh-obi
+    AR_x86_64_pc_windows_msvc="$llvm_lib" "$xwin_bin" build --target-dir "$cargo_target_dir" --release --target "$target" --no-default-features --bin ssh-obi
 }
 
 # Cargo host artifacts, including build-script executables, are not portable

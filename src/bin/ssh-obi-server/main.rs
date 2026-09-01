@@ -9,6 +9,9 @@ use ssh_obi::session::{SessionId, generate_session_id};
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 struct Args {
+    #[arg(long = "obi-version", conflicts_with_all = ["daemon", "detach", "list", "protocol_check"])]
+    obi_version: bool,
+
     #[arg(long, conflicts_with_all = ["detach", "list", "protocol_check"])]
     daemon: bool,
 
@@ -39,6 +42,11 @@ struct Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+
+    if args.obi_version {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
 
     if let Some(baseline) = args.protocol_check {
         return if supports_protocol_baseline(&baseline) {
