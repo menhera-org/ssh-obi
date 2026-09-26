@@ -174,8 +174,8 @@ mod runtime {
         spawn_child_waiter(pty.child, socket_path.clone(), Arc::clone(&state));
 
         while !state.lock().expect("daemon state poisoned").shutdown {
-            match listener.accept() {
-                Ok((stream, _)) => {
+            match accept_blocking(&listener) {
+                Ok(stream) => {
                     let state = Arc::clone(&state);
                     let master_write = Arc::clone(&master_write);
                     thread::spawn(move || {
@@ -191,6 +191,14 @@ mod runtime {
 
         let _ = fs::remove_file(&socket_path);
         Ok(())
+    }
+
+    fn accept_blocking(listener: &UnixListener) -> io::Result<UnixStream> {
+        let (stream, _) = listener.accept()?;
+        // On BSD-derived systems, accepted sockets can inherit O_NONBLOCK
+        // from the listener. Protocol readers expect blocking streams.
+        stream.set_nonblocking(false)?;
+        Ok(stream)
     }
 
     fn set_daemon_socket_permissions(socket_path: &std::path::Path) -> Result<(), DaemonError> {
@@ -877,6 +885,29 @@ mod runtime {
             let mode = fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
             let _ = fs::remove_dir_all(root);
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn accepted_session_socket_is_blocking() {
+            use std::os::fd::AsRawFd;
+
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let socket = PathBuf::from(format!("/tmp/obi-{}-{unique}.sock", std::process::id()));
+            let listener = UnixListener::bind(&socket).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let _client = UnixStream::connect(&socket).unwrap();
+
+            let stream = accept_blocking(&listener).unwrap();
+            let flags = unsafe { nix::libc::fcntl(stream.as_raw_fd(), nix::libc::F_GETFL) };
+            assert!(flags >= 0);
+            assert_eq!(flags & nix::libc::O_NONBLOCK, 0);
+            drop(stream);
+            drop(listener);
+            fs::remove_file(socket).unwrap();
         }
 
         fn temp_test_dir(name: &str) -> PathBuf {
